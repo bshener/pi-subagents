@@ -128,6 +128,78 @@ async function cleanupSpFiles(spFiles: SpFile[]): Promise<void> {
   }
 }
 
+/**
+ * A "ghost" pane is one that was split/opened but never had a pi agent launched
+ * inside it. This is exactly what happens when `herdr agent start` returns the
+ * `agent_pane_busy` race error: Herdr has already allocated the pane, so the
+ * call fails and the pane is left behind with no running agent.
+ *
+ * Detection heuristic: a pane whose agent_status is "unknown" (no agent ever
+ * started there) is a ghost. We never touch the focused pane (the live session)
+ * and stay scoped to the current workspace/session.
+ */
+interface GhostPane {
+  pane_id: string;
+  agent_status: string;
+  focused: boolean;
+  workspace_id: string;
+}
+
+/** Lists panes and returns only the ghost (agent-less) ones for cleanup. */
+async function findGhostPanes(): Promise<GhostPane[]> {
+  const { stdout } = await runHerdr(["pane", "list"]);
+  const panes = parseHerdrResult<{ pane_id: string; agent_status: string; focused: boolean; workspace_id: string }[]>(
+    stdout,
+    "panes",
+  );
+  if (!panes) return [];
+  // Only clean panes in this workspace, that never got an agent, and are not
+  // the focused (live) pane — never close the session we're running in.
+  return panes.filter((p) => p.agent_status === "unknown" && !p.focused);
+}
+
+/**
+ * Closes every ghost pane left behind by a failed subagent launch. Returns a
+ * human-readable report of what was closed (or that there was nothing to do).
+ */
+async function cleanupPanes(
+  _id: string,
+  _params: unknown,
+  _signal: AbortSignal | undefined,
+  _onUpdate: (data: unknown) => void,
+  ctx: { cwd: string },
+): Promise<{ content: Array<{ type: "text"; text: string }>; details: {} }> {
+  const ghosts = await findGhostPanes();
+  if (ghosts.length === 0) {
+    return {
+      content: [
+        {
+          type: "text",
+          text: "brk-herdr-cleanup: no ghost panes found — everything is clean. (A ghost is a pane that was opened but never ran an agent, e.g. left by a failed subagent launch.)",
+        },
+      ],
+    };
+  }
+  const closed: string[] = [];
+  const failed: string[] = [];
+  for (const g of ghosts) {
+    const { stdout, stderr, code } = await runHerdr(["pane", "close", g.pane_id]);
+    if (code === 0) {
+      closed.push(g.pane_id);
+    } else {
+      failed.push(`${g.pane_id} (${stderr || stdout.trim() || "unknown error"})`);
+    }
+  }
+  const lines: string[] = [`brk-herdr-cleanup: closed ${closed.length} ghost pane(s):`, ...closed.map((p) => `  • ${p}`)];
+  if (failed.length) {
+    lines.push(`\nCould not close ${failed.length} (may already be gone):`, ...failed.map((p) => `  • ${p}`));
+  }
+  return {
+    content: [{ type: "text", text: lines.join("\n") }],
+    details: {},
+  };
+}
+
 /** Returns true once the pane no longer exists in herdr (i.e. it was closed). */
 async function isPaneClosed(paneId: string): Promise<boolean> {
   const { stdout } = await runHerdr(["pane", "list"]);
@@ -553,5 +625,20 @@ export default function (pi: ExtensionAPI) {
     renderResult: (res) =>
       new Text(res.content.map((c) => ("text" in c ? c.text : "")).join("\n"), 0, 0),
     execute: listAgents,
+  });
+
+  pi.registerTool({
+    name: "brk-herdr-cleanup",
+    label: "brk-herdr-cleanup",
+    description:
+      "Closes ghost panes — panes that were opened but never ran a pi agent, " +
+      "typically left behind by a failed subagent launch (agent_pane_busy race). " +
+      "Never closes the focused/live pane. Run this after a subagent call that " +
+      "returned an error to keep your workspace clean.",
+    parameters: Type.Object({}),
+    renderCall: () => new Text("brk-herdr-cleanup", 0, 0),
+    renderResult: (res) =>
+      new Text(res.content.map((c) => ("text" in c ? c.text : "")).join("\n"), 0, 0),
+    execute: cleanupPanes,
   });
 }
