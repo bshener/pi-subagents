@@ -1,13 +1,13 @@
 /**
- * brk-herdr
+ * pi-subagents
  * -------------------------------------------------------------------------
  * When running pi inside Herdr, this extension exposes LLM tools that open a
  * new visible Herdr pane and launch an isolated pi "subagent" inside it.
  *
  * Agents are defined as one directory per agent under:
- *   <cwd>/.pi/agent/brk-herdr-agents/<agent-id>/BRK-HERDR-AGENT.md
- * (overridable via the BRK_HERDR_AGENTS_DIR env var, falling back to
- *  ~/.pi/agent/brk-herdr-agents/<agent-id>/BRK-HERDR-AGENT.md). Each file:
+ *   <cwd>/.pi/subagents/<agent-id>/subagent.md
+ * (overridable via the PI_SUBAGENTS_DIR env var, falling back to
+ *  ~/.pi/subagents/<agent-id>/subagent.md). Each file:
  *
  *   ---
  *   name: Reviewer
@@ -40,12 +40,12 @@ import { Text } from "@earendil-works/pi-tui";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 const HERDR_BIN = process.env.HERDR_BIN ?? "herdr";
-const DEFAULT_TIMEOUT_MS = 180_000; // 3 minutes
-const AGENT_FILENAME = "BRK-HERDR-AGENT.md";
+const DEFAULT_TIMEOUT_MS = 360_000; // 3 minutes
+const AGENT_FILENAME = "subagent.md";
 // How long to wait before retrying a close that raced with the agent exiting.
 const CLOSE_RETRY_MS = 400;
 
-interface BrkHerdrParams {
+interface PiSubagentsParams {
   /** Name of an agent directory under the agents dir (matches the folder name). */
   agent?: string;
   /** The task the subagent will perform (the user prompt). */
@@ -115,7 +115,7 @@ function runHerdr(args: Array<string>): Promise<{
 }
 
 async function writeTempSystemPrompt(content: string): Promise<string> {
-  const dir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "brk-herdr-"));
+  const dir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "pi-subagents-"));
   const file = path.join(dir, "system-prompt.md");
   await fs.promises.writeFile(file, content, "utf8");
   return file;
@@ -175,7 +175,7 @@ async function cleanupPanes(
       content: [
         {
           type: "text",
-          text: "brk-herdr-cleanup: no ghost panes found — everything is clean. (A ghost is a pane that was opened but never ran an agent, e.g. left by a failed subagent launch.)",
+          text: "pi-subagents-cleanup: no ghost panes found — everything is clean. (A ghost is a pane that was opened but never ran an agent, e.g. left by a failed subagent launch.)",
         },
       ],
     };
@@ -190,7 +190,7 @@ async function cleanupPanes(
       failed.push(`${g.pane_id} (${stderr || stdout.trim() || "unknown error"})`);
     }
   }
-  const lines: string[] = [`brk-herdr-cleanup: closed ${closed.length} ghost pane(s):`, ...closed.map((p) => `  • ${p}`)];
+  const lines: string[] = [`pi-subagents-cleanup: closed ${closed.length} ghost pane(s):`, ...closed.map((p) => `  • ${p}`)];
   if (failed.length) {
     lines.push(`\nCould not close ${failed.length} (may already be gone):`, ...failed.map((p) => `  • ${p}`));
   }
@@ -219,11 +219,11 @@ function parseAgentManifest(content: string): { meta: Record<string, string>; bo
   return { meta, body: m[2] };
 }
 
-/** Resolves the agents directory (env override > project-local .pi/agent > ~/.pi/agent). */
+/** Resolves the agents directory (env override > project-local .pi/subagents > ~/.pi/agent/subagents). */
 function resolveAgentsDir(cwd: string): string {
-  if (process.env.BRK_HERDR_AGENTS_DIR) return process.env.BRK_HERDR_AGENTS_DIR;
-  const projectLocal = path.join(cwd, ".pi", "agent", "brk-herdr-agents");
-  const globalDir = path.join(os.homedir(), ".pi", "agent", "brk-herdr-agents");
+  if (process.env.PI_SUBAGENTS_DIR) return process.env.PI_SUBAGENTS_DIR;
+  const projectLocal = path.join(cwd, ".pi", "subagents");
+  const globalDir = path.join(os.homedir(), ".pi", "agent", "subagents");
   return fs.existsSync(projectLocal) ? projectLocal : globalDir;
 }
 
@@ -244,7 +244,7 @@ async function discoverAgents(dir: string): Promise<
     try {
       content = await fs.promises.readFile(agentFile, "utf8");
     } catch {
-      continue; // Not an agent directory (no BRK-HERDR-AGENT.md).
+      continue; // Not an agent directory (no subagent.md).
     }
     const { meta } = parseAgentManifest(content);
     agents.push({
@@ -290,7 +290,7 @@ interface SpFile {
 
 async function execute(
   _id: string,
-  params: BrkHerdrParams,
+  params: PiSubagentsParams,
   _signal: AbortSignal | undefined,
   _onUpdate: (data: unknown) => void,
   ctx: { cwd: string; model?: { provider?: string; id?: string } }
@@ -300,7 +300,7 @@ async function execute(
 }> {
   if (!params.task?.trim()) {
     return {
-      content: [{ type: "text", text: "brk-herdr: 'task' cannot be empty." }],
+      content: [{ type: "text", text: "pi-subagents: 'task' cannot be empty." }],
       details: {},
     };
   }
@@ -315,7 +315,7 @@ async function execute(
       content: [
         {
           type: "text",
-          text: `brk-herdr: unknown agent "${params.agent}". Run /brk-herdr-list-agents to see available agents.`,
+          text: `pi-subagents: unknown agent "${params.agent}". Run /pi-subagents-list-agents to see available agents.`,
         },
       ],
       details: {},
@@ -337,7 +337,7 @@ async function execute(
       content: [
         {
           type: "text",
-          text: `brk-herdr: no model specified. Pass --agent <id> (which declares a model) or --model <provider/id>. Refusing to silently inherit the current model ("${currentModel ?? "<none>"}")`,
+          text: `pi-subagents: no model specified. Pass --agent <id> (which declares a model) or --model <provider/id>. Refusing to silently inherit the current model ("${currentModel ?? "<none>"}")`,
         },
       ],
       details: {},
@@ -351,7 +351,7 @@ async function execute(
       content: [
         {
           type: "text",
-          text: `brk-herdr: no model. Set one via --model or in the agent file (${dir}/${params.agent ?? "<id>"}/BRK-HERDR-AGENT.md).`,
+          text: `pi-subagents: no model. Set one via --model or in the agent file (${dir}/${params.agent ?? "<id>"}/subagent.md).`,
         },
       ],
       details: {},
@@ -390,7 +390,7 @@ async function execute(
   } catch (err) {
     await cleanupSpFiles(spFiles);
     return {
-      content: [{ type: "text", text: `brk-herdr: ${err instanceof Error ? err.message : String(err)}` }],
+      content: [{ type: "text", text: `pi-subagents: ${err instanceof Error ? err.message : String(err)}` }],
       details: {},
     };
   }
@@ -420,7 +420,7 @@ async function runTask(
   const { stdout, stderr, code } = await runHerdr(splitArgs);
   if (code !== 0) {
     return {
-      content: [{ type: "text", text: `brk-herdr: pane split failed: ${stderr || stdout}` }],
+      content: [{ type: "text", text: `pi-subagents: pane split failed: ${stderr || stdout}` }],
       details: {},
     };
   }
@@ -428,7 +428,7 @@ async function runTask(
   const paneId = pane?.pane_id;
   if (!paneId) {
     return {
-      content: [{ type: "text", text: `brk-herdr: could not parse pane_id: ${stdout}` }],
+      content: [{ type: "text", text: `pi-subagents: could not parse pane_id: ${stdout}` }],
       details: {},
     };
   }
@@ -458,7 +458,7 @@ async function runTask(
       content: [
         {
           type: "text",
-          text: `brk-herdr: agent start failed: ${startErr || startOut}`,
+          text: `pi-subagents: agent start failed: ${startErr || startOut}`,
         },
       ],
       details: {},
@@ -499,7 +499,7 @@ async function runTask(
     }
   }
 
-  const status = `brk-herdr: pane ${paneId} • ${opts.model} • agent ${agentName} • ${
+  const status = `pi-subagents: pane ${paneId} • ${opts.model} • agent ${agentName} • ${
     done ? "task completed" : "timed out"
   } • ${opts.closePaneOnDone ? (closed ? "pane closed" : "pane still open") : "pane open"}`;
   const text = paneOutput
@@ -526,7 +526,7 @@ async function listAgents(
       content: [
         {
           type: "text",
-          text: `No agents found in ${dir}. Create a <agent-id>/BRK-HERDR-AGENT.md file there with YAML frontmatter (name, description, model) and a system prompt in the body.`,
+          text: `No agents found in ${dir}. Create a <agent-id>/subagent.md file there with YAML frontmatter (name, description, model) and a system prompt in the body.`,
         },
       ],
     };
@@ -538,7 +538,7 @@ async function listAgents(
     content: [
       {
         type: "text",
-        text: `Agents available in ${dir}:\n${lines.join("\n")}\n\nUse them with /brk-herdr --agent <id> "task".`,
+        text: `Agents available in ${dir}:\n${lines.join("\n")}\n\nUse them with /pi-subagents --agent <id> "task".`,
       },
     ],
     details: {},
@@ -549,15 +549,15 @@ async function listAgents(
  * Registers the LLM tools.
  *
  * Usage (from the pi command line):
- *   /brk-herdr "Update the README"
- *   /brk-herdr --model "openai/gpt-5" --no-close "Test it and write the report"
- *   /brk-herdr --agent reviewer "Review these changes"
- *   /brk-herdr-list-agents
+ *   /pi-subagents "Update the README"
+ *   /pi-subagents --model "openai/gpt-5" --no-close "Test it and write the report"
+ *   /pi-subagents --agent reviewer "Review these changes"
+ *   /pi-subagents-list-agents
  */
 export default function (pi: ExtensionAPI) {
   pi.registerTool({
-    name: "brk-herdr",
-    label: "brk-herdr",
+    name: "pi-subagents",
+    label: "pi-subagents",
     description:
       "Opens a new visible pane in Herdr and launches an isolated pi subagent inside it. " +
       "Uses Herdr's agent start/prompt/read lifecycle API for reliable execution. " +
@@ -593,19 +593,19 @@ export default function (pi: ExtensionAPI) {
         Type.Boolean({ description: "Close the pane when the task completes? Default: true." })
       ),
       timeoutMs: Type.Optional(
-        Type.Number({ description: "Maximum wait time in ms. Default: 180000." })
+        Type.Number({ description: "Maximum wait time in ms. Default: 360000." })
       ),
     }),
     renderCall: (args) =>
       new Text(
-        `brk-herdr: ${args.task} (agent=${args.agent ?? "none"}, model=${args.model ?? "current"}, pane=${args.direction ?? "right"})`,
+        `pi-subagents: ${args.task} (agent=${args.agent ?? "none"}, model=${args.model ?? "current"}, pane=${args.direction ?? "right"})`,
         0,
         0
       ),
     renderResult: (res) => {
       const text = res.content.map((c) => ("text" in c ? c.text : "")).join("\n");
       return new Text(
-        text.startsWith("brk-herdr failed:")
+        text.startsWith("pi-subagents failed:")
           ? text
           : text,
         0,
@@ -616,27 +616,27 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.registerTool({
-    name: "brk-herdr-list-agents",
-    label: "brk-herdr-list-agents",
+    name: "pi-subagents-list-agents",
+    label: "pi-subagents-list-agents",
     description:
-      "Lists the subagents defined under the brk-herdr agents directory so they can be passed to brk-herdr via --agent.",
+      "Lists the subagents defined under the pi-subagents agents directory so they can be passed to pi-subagents via --agent.",
     parameters: Type.Object({}),
-    renderCall: () => new Text("brk-herdr-list-agents", 0, 0),
+    renderCall: () => new Text("pi-subagents-list-agents", 0, 0),
     renderResult: (res) =>
       new Text(res.content.map((c) => ("text" in c ? c.text : "")).join("\n"), 0, 0),
     execute: listAgents,
   });
 
   pi.registerTool({
-    name: "brk-herdr-cleanup",
-    label: "brk-herdr-cleanup",
+    name: "pi-subagents-cleanup",
+    label: "pi-subagents-cleanup",
     description:
       "Closes ghost panes — panes that were opened but never ran a pi agent, " +
       "typically left behind by a failed subagent launch (agent_pane_busy race). " +
       "Never closes the focused/live pane. Run this after a subagent call that " +
       "returned an error to keep your workspace clean.",
     parameters: Type.Object({}),
-    renderCall: () => new Text("brk-herdr-cleanup", 0, 0),
+    renderCall: () => new Text("pi-subagents-cleanup", 0, 0),
     renderResult: (res) =>
       new Text(res.content.map((c) => ("text" in c ? c.text : "")).join("\n"), 0, 0),
     execute: cleanupPanes,
