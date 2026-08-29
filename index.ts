@@ -254,6 +254,25 @@ async function execute(
   const currentModel = ctx.model?.id
     ? ctx.model.provider ? `${ctx.model.provider}/${ctx.model.id}` : ctx.model.id
     : undefined;
+
+  // Guard: if neither an explicit --model nor an agent that declares a model
+  // was provided, refuse to silently fall back to the current model. That
+  // fallback usually means the caller forgot to pass --agent or --model, so
+  // the subagent would silently inherit the wrong model (e.g. inherit the
+  // orchestrator's own model instead of the agent's declared one).
+  if (!params.model && !agent?.model) {
+    return {
+      content: [
+        {
+          type: "text",
+          text: `brk-herdr: no model specified. Pass --agent <id> (which declares a model) or --model <provider/id>. Refusing to silently inherit the current model ("${currentModel ?? "<none>"}")`,
+        },
+      ],
+      details: {},
+    };
+  }
+
+  // At least one of --model / agent.model is guaranteed by the guard above.
   const model = params.model ?? agent?.model ?? currentModel;
   if (!model) {
     return {
