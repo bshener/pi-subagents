@@ -45,6 +45,33 @@ const AGENT_FILENAME = "subagent.md";
 // How long to wait before retrying a close that raced with the agent exiting.
 const CLOSE_RETRY_MS = 400;
 
+// `agent start` readiness is screen-detection based: Herdr only succeeds once
+// pi has fully launched and rendered inside the freshly split pane. Right after
+// `pane split` the pane's shell is still coming up, so the first attempt often
+// fails with a transient error. These codes mean "pi isn't ready yet" (as
+// opposed to a real misconfiguration), so we retry them with backoff instead of
+// abandoning the already-allocated pane — which would leave a ghost/host pane.
+// The per-attempt readiness timeout is left to Herdr's default (30s) on purpose:
+// a cold llama.cpp model can take a while, and shortening it would regress the
+// cold-start case that the original default handled fine.
+const TRANSIENT_START_ERRORS = new Set(["agent_pane_busy", "timeout"]);
+const MAX_START_ATTEMPTS = 3; // bounds worst case to ~3×30s if pi never starts
+const START_BACKOFF_MS = 1_500;
+
+/** Extracts the `error.code` string from a herdr JSON error payload, if any. */
+function parseHerdrErrorCode(stdout: string): string | undefined {
+  const line = stdout
+    .split("\n")
+    .map((l) => l.trim())
+    .find((l) => l.startsWith("{"));
+  if (!line) return undefined;
+  try {
+    return JSON.parse(line)?.error?.code;
+  } catch {
+    return undefined;
+  }
+}
+
 interface PiSubagentsParams {
   /** Name of an agent directory under the agents dir (matches the folder name). */
   agent?: string;
@@ -126,78 +153,6 @@ async function cleanupSpFiles(spFiles: SpFile[]): Promise<void> {
   for (const f of spFiles) {
     if (f.owned && f.path) await fs.promises.unlink(f.path).catch(() => {});
   }
-}
-
-/**
- * A "ghost" pane is one that was split/opened but never had a pi agent launched
- * inside it. This is exactly what happens when `herdr agent start` returns the
- * `agent_pane_busy` race error: Herdr has already allocated the pane, so the
- * call fails and the pane is left behind with no running agent.
- *
- * Detection heuristic: a pane whose agent_status is "unknown" (no agent ever
- * started there) is a ghost. We never touch the focused pane (the live session)
- * and stay scoped to the current workspace/session.
- */
-interface GhostPane {
-  pane_id: string;
-  agent_status: string;
-  focused: boolean;
-  workspace_id: string;
-}
-
-/** Lists panes and returns only the ghost (agent-less) ones for cleanup. */
-async function findGhostPanes(): Promise<GhostPane[]> {
-  const { stdout } = await runHerdr(["pane", "list"]);
-  const panes = parseHerdrResult<{ pane_id: string; agent_status: string; focused: boolean; workspace_id: string }[]>(
-    stdout,
-    "panes",
-  );
-  if (!panes) return [];
-  // Only clean panes in this workspace, that never got an agent, and are not
-  // the focused (live) pane — never close the session we're running in.
-  return panes.filter((p) => p.agent_status === "unknown" && !p.focused);
-}
-
-/**
- * Closes every ghost pane left behind by a failed subagent launch. Returns a
- * human-readable report of what was closed (or that there was nothing to do).
- */
-async function cleanupPanes(
-  _id: string,
-  _params: unknown,
-  _signal: AbortSignal | undefined,
-  _onUpdate: (data: unknown) => void,
-  ctx: { cwd: string },
-): Promise<{ content: Array<{ type: "text"; text: string }>; details: {} }> {
-  const ghosts = await findGhostPanes();
-  if (ghosts.length === 0) {
-    return {
-      content: [
-        {
-          type: "text",
-          text: "pi-subagents-cleanup: no ghost panes found — everything is clean. (A ghost is a pane that was opened but never ran an agent, e.g. left by a failed subagent launch.)",
-        },
-      ],
-    };
-  }
-  const closed: string[] = [];
-  const failed: string[] = [];
-  for (const g of ghosts) {
-    const { stdout, stderr, code } = await runHerdr(["pane", "close", g.pane_id]);
-    if (code === 0) {
-      closed.push(g.pane_id);
-    } else {
-      failed.push(`${g.pane_id} (${stderr || stdout.trim() || "unknown error"})`);
-    }
-  }
-  const lines: string[] = [`pi-subagents-cleanup: closed ${closed.length} ghost pane(s):`, ...closed.map((p) => `  • ${p}`)];
-  if (failed.length) {
-    lines.push(`\nCould not close ${failed.length} (may already be gone):`, ...failed.map((p) => `  • ${p}`));
-  }
-  return {
-    content: [{ type: "text", text: lines.join("\n") }],
-    details: {},
-  };
 }
 
 /** Returns true once the pane no longer exists in herdr (i.e. it was closed). */
@@ -440,7 +395,8 @@ async function runTask(
   for (const f of spFiles) {
     if (f.path) piArgsAfterDashes.push("--append-system-prompt", f.path);
   }
-  const startArgs = [
+  // `--` passes remaining args through to pi itself (--model, --append-system-prompt, etc.).
+  const buildStartArgs = () => [
     "agent",
     "start",
     agentName,
@@ -452,13 +408,31 @@ async function runTask(
     ...piArgsAfterDashes,
   ];
 
-  const { stdout: startOut, stderr: startErr, code: startCode } = await runHerdr(startArgs);
+  // 2) Start a named pi agent in the pane. The pane's shell is still coming up
+  //    right after `pane split`, so readiness (screen-detection based) can fail
+  //    transiently. Retry `agent_pane_busy`/`timeout` with backoff so pi has a
+  //    chance to finish starting instead of leaving the pane as a ghost.
+  let startOut = "";
+  let startErr = "";
+  let startCode = 0;
+  let startAttempt = 0;
+  for (; startAttempt < MAX_START_ATTEMPTS; startAttempt++) {
+    const r = await runHerdr(buildStartArgs());
+    startOut = r.stdout;
+    startErr = r.stderr;
+    startCode = r.code;
+    if (startCode === 0) break;
+    const errCode = parseHerdrErrorCode(startErr || startOut);
+    const transient = errCode ? TRANSIENT_START_ERRORS.has(errCode) : false;
+    if (!transient || startAttempt === MAX_START_ATTEMPTS - 1) break;
+    await sleep(START_BACKOFF_MS * (startAttempt + 1));
+  }
   if (startCode !== 0) {
     return {
       content: [
         {
           type: "text",
-          text: `pi-subagents: agent start failed: ${startErr || startOut}`,
+          text: `pi-subagents: agent start failed (after ${startAttempt + 1} attempt(s)): ${startErr || startOut}`,
         },
       ],
       details: {},
@@ -469,7 +443,7 @@ async function runTask(
   //    This is the proper lifecycle-aware way to send a prompt and block until
   //    the agent reaches idle/done/blocked, replacing the old manual polling.
   const promptArgs = ["agent", "prompt", agentName, task, "--wait", "--timeout", String(opts.timeoutMs)];
-  const { stdout: promptOut, stderr: promptErr, code: promptCode } = await runHerdr(promptArgs);
+  const { stdout: _promptOut, stderr: _promptErr, code: promptCode } = await runHerdr(promptArgs);
   const done = promptCode === 0;
 
   // 4) Capture the subagent's output via agent read (handles alternate-screen).
@@ -625,20 +599,5 @@ export default function (pi: ExtensionAPI) {
     renderResult: (res) =>
       new Text(res.content.map((c) => ("text" in c ? c.text : "")).join("\n"), 0, 0),
     execute: listAgents,
-  });
-
-  pi.registerTool({
-    name: "pi-subagents-cleanup",
-    label: "pi-subagents-cleanup",
-    description:
-      "Closes ghost panes — panes that were opened but never ran a pi agent, " +
-      "typically left behind by a failed subagent launch (agent_pane_busy race). " +
-      "Never closes the focused/live pane. Run this after a subagent call that " +
-      "returned an error to keep your workspace clean.",
-    parameters: Type.Object({}),
-    renderCall: () => new Text("pi-subagents-cleanup", 0, 0),
-    renderResult: (res) =>
-      new Text(res.content.map((c) => ("text" in c ? c.text : "")).join("\n"), 0, 0),
-    execute: cleanupPanes,
   });
 }
