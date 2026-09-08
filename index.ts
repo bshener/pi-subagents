@@ -137,12 +137,16 @@ function runHerdr(args: Array<string>): Promise<{
     proc.stdout.on("data", (d) => (out += d.toString()));
     proc.stderr.on("data", (d) => (err += d.toString()));
     proc.on("error", () => resolve({ code: 127, stdout: "", stderr: err }));
-    proc.on("close", (code) => resolve({ code: code ?? 0, stdout: out, stderr: err }));
+    proc.on("close", (code) =>
+      resolve({ code: code ?? 0, stdout: out, stderr: err }),
+    );
   });
 }
 
 async function writeTempSystemPrompt(content: string): Promise<string> {
-  const dir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "pi-subagents-"));
+  const dir = await fs.promises.mkdtemp(
+    path.join(os.tmpdir(), "pi-subagents-"),
+  );
   const file = path.join(dir, "system-prompt.md");
   await fs.promises.writeFile(file, content, "utf8");
   return file;
@@ -163,7 +167,10 @@ async function isPaneClosed(paneId: string): Promise<boolean> {
 }
 
 /** Minimal YAML-frontmatter + markdown-body parser (no external dependency). */
-function parseAgentManifest(content: string): { meta: Record<string, string>; body: string } {
+function parseAgentManifest(content: string): {
+  meta: Record<string, string>;
+  body: string;
+} {
   const m = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/.exec(content);
   if (!m) return { meta: {}, body: content };
   const meta: Record<string, string> = {};
@@ -183,7 +190,9 @@ function resolveAgentsDir(cwd: string): string {
 }
 
 /** Lists agent definitions discovered in the agents directory. */
-async function discoverAgents(dir: string): Promise<
+async function discoverAgents(
+  dir: string,
+): Promise<
   Array<{ id: string; name: string; description: string; model?: string }>
 > {
   let entries: string[];
@@ -192,7 +201,12 @@ async function discoverAgents(dir: string): Promise<
   } catch {
     return [];
   }
-  const agents: Array<{ id: string; name: string; description: string; model?: string }> = [];
+  const agents: Array<{
+    id: string;
+    name: string;
+    description: string;
+    model?: string;
+  }> = [];
   for (const entry of entries.sort()) {
     const agentFile = path.join(dir, entry, AGENT_FILENAME);
     let content: string;
@@ -248,14 +262,22 @@ async function execute(
   params: PiSubagentsParams,
   _signal: AbortSignal | undefined,
   _onUpdate: (data: unknown) => void,
-  ctx: { cwd: string; model?: { provider?: string; id?: string } }
+  ctx: { cwd: string; model?: { provider?: string; id?: string } },
 ): Promise<{
   content: Array<{ type: "text"; text: string }>;
-  details: { paneId?: string; model?: string; agent?: string; done?: boolean; closed?: boolean };
+  details: {
+    paneId?: string;
+    model?: string;
+    agent?: string;
+    done?: boolean;
+    closed?: boolean;
+  };
 }> {
   if (!params.task?.trim()) {
     return {
-      content: [{ type: "text", text: "pi-subagents: 'task' cannot be empty." }],
+      content: [
+        { type: "text", text: "pi-subagents: 'task' cannot be empty." },
+      ],
       details: {},
     };
   }
@@ -279,7 +301,9 @@ async function execute(
 
   // Model precedence: --model flag > agent file (md) > the current model.
   const currentModel = ctx.model?.id
-    ? ctx.model.provider ? `${ctx.model.provider}/${ctx.model.id}` : ctx.model.id
+    ? ctx.model.provider
+      ? `${ctx.model.provider}/${ctx.model.id}`
+      : ctx.model.id
     : undefined;
 
   // Guard: if neither an explicit --model nor an agent that declares a model
@@ -314,7 +338,8 @@ async function execute(
   }
   const direction = params.direction ?? agent?.direction ?? "right";
   const focus = params.focus ?? false;
-  const closePaneOnDone = params.closePaneOnDone ?? agent?.closePaneOnDone ?? true;
+  const closePaneOnDone =
+    params.closePaneOnDone ?? agent?.closePaneOnDone ?? true;
   const timeoutMs = params.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 
   // Build the system prompt files to pass to pi (--append-system-prompt).
@@ -337,7 +362,7 @@ async function execute(
     const res = await runTask(
       { cwd, model, direction, focus, closePaneOnDone, timeoutMs },
       spFiles,
-      params.task
+      params.task,
     );
     // Always remove the temp system-prompt files we created, whatever happened.
     await cleanupSpFiles(spFiles);
@@ -345,19 +370,37 @@ async function execute(
   } catch (err) {
     await cleanupSpFiles(spFiles);
     return {
-      content: [{ type: "text", text: `pi-subagents: ${err instanceof Error ? err.message : String(err)}` }],
+      content: [
+        {
+          type: "text",
+          text: `pi-subagents: ${err instanceof Error ? err.message : String(err)}`,
+        },
+      ],
       details: {},
     };
   }
 }
 
 async function runTask(
-  opts: { cwd: string; model: string; direction: string; focus: boolean; closePaneOnDone: boolean; timeoutMs: number },
+  opts: {
+    cwd: string;
+    model: string;
+    direction: string;
+    focus: boolean;
+    closePaneOnDone: boolean;
+    timeoutMs: number;
+  },
   spFiles: SpFile[],
-  task: string
+  task: string,
 ): Promise<{
   content: Array<{ type: "text"; text: string }>;
-  details: { paneId?: string; model?: string; agent?: string; done?: boolean; closed?: boolean };
+  details: {
+    paneId?: string;
+    model?: string;
+    agent?: string;
+    done?: boolean;
+    closed?: boolean;
+  };
 }> {
   // Generate a unique agent name (max 32 chars, must match [a-z][a-z0-9_-]*)
   const agentName = `subagent-${Date.now().toString(36)}`.slice(0, 32);
@@ -375,7 +418,12 @@ async function runTask(
   const { stdout, stderr, code } = await runHerdr(splitArgs);
   if (code !== 0) {
     return {
-      content: [{ type: "text", text: `pi-subagents: pane split failed: ${stderr || stdout}` }],
+      content: [
+        {
+          type: "text",
+          text: `pi-subagents: pane split failed: ${stderr || stdout}`,
+        },
+      ],
       details: {},
     };
   }
@@ -383,7 +431,12 @@ async function runTask(
   const paneId = pane?.pane_id;
   if (!paneId) {
     return {
-      content: [{ type: "text", text: `pi-subagents: could not parse pane_id: ${stdout}` }],
+      content: [
+        {
+          type: "text",
+          text: `pi-subagents: could not parse pane_id: ${stdout}`,
+        },
+      ],
       details: {},
     };
   }
@@ -442,8 +495,20 @@ async function runTask(
   // 3) Submit the task and wait for completion using Herdr's agent prompt --wait.
   //    This is the proper lifecycle-aware way to send a prompt and block until
   //    the agent reaches idle/done/blocked, replacing the old manual polling.
-  const promptArgs = ["agent", "prompt", agentName, task, "--wait", "--timeout", String(opts.timeoutMs)];
-  const { stdout: _promptOut, stderr: _promptErr, code: promptCode } = await runHerdr(promptArgs);
+  const promptArgs = [
+    "agent",
+    "prompt",
+    agentName,
+    task,
+    "--wait",
+    "--timeout",
+    String(opts.timeoutMs),
+  ];
+  const {
+    stdout: _promptOut,
+    stderr: _promptErr,
+    code: promptCode,
+  } = await runHerdr(promptArgs);
   const done = promptCode === 0;
 
   // 4) Capture the subagent's output via agent read (handles alternate-screen).
@@ -491,7 +556,7 @@ async function listAgents(
   _params: unknown,
   _signal: AbortSignal | undefined,
   _onUpdate: (data: unknown) => void,
-  ctx: { cwd: string }
+  ctx: { cwd: string },
 ): Promise<{ content: Array<{ type: "text"; text: string }>; details: {} }> {
   const dir = resolveAgentsDir(ctx.cwd);
   const agents = await discoverAgents(dir);
@@ -506,7 +571,8 @@ async function listAgents(
     };
   }
   const lines = agents.map(
-    (a) => `• ${a.id} — ${a.name}${a.description ? `: ${a.description}` : ""}${a.model ? ` [model: ${a.model}]` : ""}`
+    (a) =>
+      `• ${a.id} — ${a.name}${a.description ? `: ${a.description}` : ""}${a.model ? ` [model: ${a.model}]` : ""}`,
   );
   return {
     content: [
@@ -542,48 +608,68 @@ export default function (pi: ExtensionAPI) {
         Type.String({
           description:
             "Agent id (directory name under the agents dir). Loads that agent's model + system prompt.",
-        })
+        }),
       ),
       task: Type.String({ description: "The task the subagent will perform." }),
       model: Type.Optional(
-        Type.String({ description: "The model to use. Overrides the agent file and the current model." })
+        Type.String({
+          description:
+            "The model to use. Overrides the agent file and the current model.",
+        }),
       ),
       systemPrompt: Type.Optional(
-        Type.String({ description: "Inline system prompt appended after the agent's own system prompt." })
+        Type.String({
+          description:
+            "Inline system prompt appended after the agent's own system prompt.",
+        }),
       ),
       cwd: Type.Optional(
-        Type.String({ description: "Working directory for the pane. If omitted, the current cwd is used." })
+        Type.String({
+          description:
+            "Working directory for the pane. If omitted, the current cwd is used.",
+        }),
       ),
       direction: Type.Optional(
         Type.Union(
-          [Type.Literal("right"), Type.Literal("left"), Type.Literal("down"), Type.Literal("up")],
-          { description: "Pane split direction." }
-        )
+          [
+            Type.Literal("right"),
+            Type.Literal("left"),
+            Type.Literal("down"),
+            Type.Literal("up"),
+          ],
+          { description: "Pane split direction." },
+        ),
       ),
       focus: Type.Optional(
-        Type.Boolean({ description: "Should the new pane take focus? Default: false." })
+        Type.Boolean({
+          description: "Should the new pane take focus? Default: false.",
+        }),
       ),
       closePaneOnDone: Type.Optional(
-        Type.Boolean({ description: "Close the pane when the task completes? Default: true." })
+        Type.Boolean({
+          description: "Close the pane when the task completes? Default: true.",
+        }),
       ),
       timeoutMs: Type.Optional(
-        Type.Number({ description: "Maximum wait time in ms. Default: 360000." })
+        Type.Number({
+          description: "Maximum wait time in ms. Default: 360000.",
+        }),
       ),
     }),
     renderCall: (args) =>
       new Text(
         `pi-subagents: ${args.task} (agent=${args.agent ?? "none"}, model=${args.model ?? "current"}, pane=${args.direction ?? "right"})`,
         0,
-        0
+        0,
       ),
     renderResult: (res) => {
-      const text = res.content.map((c) => ("text" in c ? c.text : "")).join("\n");
+      const text = res.content
+        .map((c) => ("text" in c ? c.text : ""))
+        .join("\n");
       return new Text(
-        text.startsWith("pi-subagents failed:")
-          ? text
-          : text,
+        text.startsWith("pi-subagents failed:") ? text : text,
         0,
-        0
+        0,
       );
     },
     execute,
@@ -597,7 +683,11 @@ export default function (pi: ExtensionAPI) {
     parameters: Type.Object({}),
     renderCall: () => new Text("pi-subagents-list-agents", 0, 0),
     renderResult: (res) =>
-      new Text(res.content.map((c) => ("text" in c ? c.text : "")).join("\n"), 0, 0),
+      new Text(
+        res.content.map((c) => ("text" in c ? c.text : "")).join("\n"),
+        0,
+        0,
+      ),
     execute: listAgents,
   });
 }
