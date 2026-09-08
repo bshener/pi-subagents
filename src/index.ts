@@ -1,36 +1,3 @@
-/**
- * pi-subagents
- * -------------------------------------------------------------------------
- * When running pi inside Herdr, this extension exposes LLM tools that open a
- * new visible Herdr pane and launch an isolated pi "subagent" inside it.
- *
- * Agents are defined as one directory per agent under:
- *   <cwd>/.pi/subagents/<agent-id>/subagent.md
- * (overridable via the PI_SUBAGENTS_DIR env var, falling back to
- *  ~/.pi/subagents/<agent-id>/subagent.md). Each file:
- *
- *   ---
- *   name: Reviewer
- *   description: Reviews code changes and lists issues
- *   model: Link-Tiny
- *   direction: right
- *   closePaneOnDone: true
- *   ---
- *
- *   # Code Reviewer
- *   You are a meticulous senior code reviewer...  <-- body = the subagent system prompt
- *
- * The directory is read on every tool call, so adding a new agent directory
- * makes it immediately available (no extension reload needed).
- *
- * Flow (uses Herdr's native agent automation API):
- *   1. herdr pane split        -> open a new pane (splitting the current one)
- *   2. herdr agent start       -> launch a named pi agent in the pane
- *   3. herdr agent prompt --wait -> submit the task and block until idle/done
- *   4. herdr agent read        -> capture the subagent's output
- *   5. herdr pane close        -> (optional) close the pane and the subagent
- * -------------------------------------------------------------------------
- */
 import { spawn } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -41,7 +8,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 const HERDR_BIN = process.env.HERDR_BIN ?? "herdr";
 const DEFAULT_TIMEOUT_MS = 360_000; // 3 minutes
-const AGENT_FILENAME = "subagent.md";
+const AGENT_FILENAME = "AGENT.md";
 // How long to wait before retrying a close that raced with the agent exiting.
 const CLOSE_RETRY_MS = 400;
 
@@ -181,11 +148,11 @@ function parseAgentManifest(content: string): {
   return { meta, body: m[2] };
 }
 
-/** Resolves the agents directory (env override > project-local .pi/subagents > ~/.pi/agent/subagents). */
+/** Resolves the agents directory (env override > project-local .pi/agents > ~/.pi/agent/agents). */
 function resolveAgentsDir(cwd: string): string {
   if (process.env.PI_SUBAGENTS_DIR) return process.env.PI_SUBAGENTS_DIR;
-  const projectLocal = path.join(cwd, ".pi", "subagents");
-  const globalDir = path.join(os.homedir(), ".pi", "agent", "subagents");
+  const projectLocal = path.join(cwd, ".pi", "agents");
+  const globalDir = path.join(os.homedir(), ".pi", "agent", "agents");
   return fs.existsSync(projectLocal) ? projectLocal : globalDir;
 }
 
@@ -213,7 +180,7 @@ async function discoverAgents(
     try {
       content = await fs.promises.readFile(agentFile, "utf8");
     } catch {
-      continue; // Not an agent directory (no subagent.md).
+      continue; // Not an agent directory (no AGENT.md).
     }
     const { meta } = parseAgentManifest(content);
     agents.push({
@@ -330,7 +297,7 @@ async function execute(
       content: [
         {
           type: "text",
-          text: `pi-subagents: no model. Set one via --model or in the agent file (${dir}/${params.agent ?? "<id>"}/subagent.md).`,
+          text: `pi-subagents: no model. Set one via --model or in the agent file (${dir}/${params.agent ?? "<id>"}/AGENT.md).`,
         },
       ],
       details: {},
@@ -565,9 +532,10 @@ async function listAgents(
       content: [
         {
           type: "text",
-          text: `No agents found in ${dir}. Create a <agent-id>/subagent.md file there with YAML frontmatter (name, description, model) and a system prompt in the body.`,
+          text: `No agents found in ${dir}. Create a <agent-id>/AGENT.md file there with YAML frontmatter (name, description, model) and a system prompt in the body.`,
         },
       ],
+      details: {},
     };
   }
   const lines = agents.map(
@@ -666,11 +634,7 @@ export default function (pi: ExtensionAPI) {
       const text = res.content
         .map((c) => ("text" in c ? c.text : ""))
         .join("\n");
-      return new Text(
-        text.startsWith("pi-subagents failed:") ? text : text,
-        0,
-        0,
-      );
+      return new Text(text, 0, 0);
     },
     execute,
   });
