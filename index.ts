@@ -11,6 +11,11 @@ const DEFAULT_TIMEOUT_MS = 360_000; // 3 minutes
 const AGENT_FILENAME = "AGENT.md";
 // How long to wait before retrying a close that raced with the agent exiting.
 const CLOSE_RETRY_MS = 400;
+// How many recent lines of the worker's terminal to read back so the caller
+// receives the actual result instead of only a status line. Bounded on purpose:
+// reading the whole transcript would reintroduce the context bloat the backchannel
+// design was meant to avoid; a tail is cheap and always contains the summary.
+const WORKER_OUTPUT_LINES = 60;
 
 // `agent start` readiness is screen-detection based: Herdr only succeeds once
 // pi has fully launched and rendered inside the freshly split pane. Right after
@@ -122,6 +127,33 @@ async function cleanupSpFiles(spFiles: SpFile[]): Promise<void> {
   for (const f of spFiles) {
     if (f.owned && f.path) await fs.promises.unlink(f.path).catch(() => {});
   }
+}
+
+/**
+ * Reads a bounded tail of an agent's terminal output.
+ *
+ * Used to capture the worker's summary so the caller actually receives the
+ * result. `--source recent --format text --lines N` keeps this cheap and avoids
+ * re-injecting the worker's entire transcript (the "context bloat" the
+ * backchannel design was trying to avoid).
+ */
+async function readAgentOutput(
+  agentName: string,
+  lines: number,
+): Promise<string | undefined> {
+  const { stdout, code } = await runHerdr([
+    "agent",
+    "read",
+    agentName,
+    "--lines",
+    String(lines),
+    "--source",
+    "recent",
+    "--format",
+    "text",
+  ]);
+  if (code !== 0) return undefined;
+  return stdout.trim();
 }
 
 /** Returns true once the pane no longer exists in herdr (i.e. it was closed). */
@@ -515,6 +547,21 @@ async function runTask(
   //    the orchestrator's pane via backchannel (see step 3), so there is nothing
   //    to read here — reading the worker's pane would defeat the no-bloat design.
 
+  // Capture the worker's recent terminal output BEFORE closing the pane, so the
+  // caller actually receives the result instead of only a status line.
+  //
+  // In the intended Herdr-orchestrator setup the worker posts its summary to the
+  // orchestrator's own pane via `herdr agent prompt`, and this tool returns only
+  // a status because the orchestrator reads that summary from its own pane. But
+  // when the orchestrator runs OUTSIDE a Herdr pane (e.g. directly in the pi
+  // harness, where HERDR_PANE_ID is unset) that backchannel has nowhere to land,
+  // so the summary is silently lost. Reading a bounded tail fixes that without
+  // re-injecting the whole transcript.
+  const workerOutput = await readAgentOutput(agentName, WORKER_OUTPUT_LINES);
+
+  // 4) Optionally close the pane / agent. The worker already sent its summary to
+  //    the orchestrator's pane via backchannel (see step 3); we additionally read
+  //    it back here so the summary is not lost when there is no orchestrator pane.
   let closed = false;
   if (opts.closePaneOnDone) {
     await runHerdr(["pane", "close", paneId]);
@@ -530,12 +577,12 @@ async function runTask(
     done ? "task completed" : "timed out"
   } • ${opts.closePaneOnDone ? (closed ? "pane closed" : "pane still open") : "pane open"}`;
 
-  // The worker sends its summary directly to the orchestrator's pane (backchannel);
-  // this tool returns only a status. The orchestrator consumes the summary from its
-  // own pane and must NOT re-read the worker's pane (that would reintroduce bloat).
+  const summaryBlock = workerOutput
+    ? `\n\n--- Worker output ---\n${workerOutput}`
+    : "";
   const text = done
-    ? status
-    : `${status}\n\nNote: the worker did not reach a terminal state in time; its summary may be incomplete.`;
+    ? `${status}${summaryBlock}`
+    : `${status}\n\nNote: the worker did not reach a terminal state in time; its summary may be incomplete.${summaryBlock}`;
 
   return {
     content: [{ type: "text", text }],
