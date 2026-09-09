@@ -154,8 +154,17 @@ function resolveAgentsDir(cwd: string): string {
   return fs.existsSync(projectLocal) ? projectLocal : globalDir;
 }
 
-/** Lists agent definitions discovered in the agents directory. */
+/** Lists agent definitions discovered in a single agents directory. */
 async function discoverAgents(
+  dir: string,
+): Promise<
+  Array<{ id: string; name: string; description: string; model?: string }>
+> {
+  return discoverAgentsIn(dir);
+}
+
+/** Shared implementation used by both discoverAgents and the list tool. */
+async function discoverAgentsIn(
   dir: string,
 ): Promise<
   Array<{ id: string; name: string; description: string; model?: string }>
@@ -320,7 +329,14 @@ async function execute(
 
   try {
     const res = await runTask(
-      { cwd, model, direction, focus, closePaneOnDone, timeoutMs },
+      {
+        cwd,
+        model,
+        direction,
+        focus,
+        closePaneOnDone,
+        timeoutMs,
+      },
       spFiles,
       params.task,
     );
@@ -451,9 +467,15 @@ async function runTask(
     };
   }
 
-  // 3) Submit the task and wait for completion using Herdr's agent prompt --wait.
-  //    This is the proper lifecycle-aware way to send a prompt and block until
-  //    the agent reaches idle/done/blocked, replacing the old manual polling.
+  // 3) Submit the task and block until the worker reaches a terminal state.
+  //    The worker sends its concise summary DIRECTLY to the orchestrator's pane
+  //    (per the worker's AGENT.md rule) via `herdr agent prompt '<PARENT_PANE_ID>'`.
+  //    The parent pane ID is embedded in the task BY THE ORCHESTRATOR (it knows
+  //    its own pane ID from HERDR_PANE_ID), so the orchestrator never reads the
+  //    worker's full transcript — only the short summary flows up, so there is no
+  //    context bloat. This tool itself does NOT inject the instruction, because it
+  //    cannot reliably determine the parent pane ID (the herdr caller env is not
+  //    guaranteed here); the agent-level rule is the reliable mechanism.
   const promptArgs = [
     "agent",
     "prompt",
@@ -463,29 +485,27 @@ async function runTask(
     "--timeout",
     String(opts.timeoutMs),
   ];
-  const {
-    stdout: _promptOut,
-    stderr: _promptErr,
-    code: promptCode,
-  } = await runHerdr(promptArgs);
-  const done = promptCode === 0;
+  const { code: promptCode } = await runHerdr(promptArgs);
 
-  // 4) Capture the subagent's output via agent read (handles alternate-screen).
-  let paneOutput = "";
-  if (done) {
-    const { stdout: readOut, code: readCode } = await runHerdr([
-      "agent",
-      "read",
-      agentName,
-      "--source",
-      "recent-unwrapped",
-      "--lines",
-      "500",
-    ]);
-    paneOutput = readCode === 0 ? readOut.trim() : "";
+  // Explicitly confirm the terminal state (prompt --wait can be lenient on
+  // timeouts) before reading the summary.
+  const terminalStates = new Set(["idle", "done", "blocked"]);
+  const deadline = Date.now() + opts.timeoutMs;
+  let agentStatus = "working";
+  for (;;) {
+    if (Date.now() >= deadline) break;
+    const g = await runHerdr(["agent", "get", agentName]);
+    const m = /"agent_status"\s*:\s*"(\w+)"/.exec(g.stdout || "");
+    agentStatus = m ? m[1] : agentStatus;
+    if (terminalStates.has(agentStatus)) break;
+    await sleep(1000);
   }
+  const done = promptCode === 0 || terminalStates.has(agentStatus);
 
-  // 5) Optionally close the pane / agent.
+  // 4) Optionally close the pane / agent. The worker already sent its summary to
+  //    the orchestrator's pane via backchannel (see step 3), so there is nothing
+  //    to read here — reading the worker's pane would defeat the no-bloat design.
+
   let closed = false;
   if (opts.closePaneOnDone) {
     await runHerdr(["pane", "close", paneId]);
@@ -500,13 +520,23 @@ async function runTask(
   const status = `pi-subagents: pane ${paneId} • ${opts.model} • agent ${agentName} • ${
     done ? "task completed" : "timed out"
   } • ${opts.closePaneOnDone ? (closed ? "pane closed" : "pane still open") : "pane open"}`;
-  const text = paneOutput
-    ? `${status}\n\n── subagent output ──\n${paneOutput}`
-    : status;
+
+  // The worker sends its summary directly to the orchestrator's pane (backchannel);
+  // this tool returns only a status. The orchestrator consumes the summary from its
+  // own pane and must NOT re-read the worker's pane (that would reintroduce bloat).
+  const text = done
+    ? status
+    : `${status}\n\nNote: the worker did not reach a terminal state in time; its summary may be incomplete.`;
 
   return {
     content: [{ type: "text", text }],
-    details: { paneId, model: opts.model, agent: agentName, done, closed },
+    details: {
+      paneId,
+      model: opts.model,
+      agent: agentName,
+      done,
+      closed,
+    },
   };
 }
 
@@ -545,6 +575,88 @@ async function listAgents(
   };
 }
 
+/** Builds the "• id — name: description [model]" line for one agent. */
+function formatAgentLine(a: {
+  id: string;
+  name: string;
+  description: string;
+  model?: string;
+}): string {
+  return `• ${a.id} — ${a.name}${a.description ? `: ${a.description}` : ""}${a.model ? ` [model: ${a.model}]` : ""}`;
+}
+
+/** Builds the "Agents available (N total)" grouped-by-source text for a cwd. */
+async function agentsBySourceText(cwd: string): Promise<string> {
+  const projectDir = path.join(cwd, ".pi", "agents");
+  const globalDir = path.join(os.homedir(), ".pi", "agent", "agents");
+
+  // env override is a single explicit source; otherwise show both project + global
+  const sources: Array<{
+    label: string;
+    dir: string;
+    agents: Array<{
+      id: string;
+      name: string;
+      description: string;
+      model?: string;
+    }>;
+  }> = [];
+  if (process.env.PI_SUBAGENTS_DIR) {
+    const agents = await discoverAgents(process.env.PI_SUBAGENTS_DIR);
+    sources.push({
+      label: `PI_SUBAGENTS_DIR (${process.env.PI_SUBAGENTS_DIR})`,
+      dir: process.env.PI_SUBAGENTS_DIR,
+      agents,
+    });
+  } else {
+    sources.push({
+      label: "Project (.pi/agents)",
+      dir: projectDir,
+      agents: await discoverAgents(projectDir),
+    });
+    sources.push({
+      label: "Global (~/.pi/agent/agents)",
+      dir: globalDir,
+      agents: await discoverAgents(globalDir),
+    });
+  }
+
+  const sections = sources.map((s) => {
+    const header = `${s.label}:`;
+    if (s.agents.length === 0) {
+      return `${header}\n  (none)`;
+    }
+    const body = s.agents.map(formatAgentLine).join("\n");
+    return `${header}\n${body}`;
+  });
+
+  const total = sources.reduce((n, s) => n + s.agents.length, 0);
+  return (
+    `Agents available (${total} total):\n\n` +
+    sections.join("\n\n") +
+    '\n\nUse them with /pi-subagents --agent <id> "task".'
+  );
+}
+
+/**
+ * Lists agents grouped by source directory (project-local vs global), so you
+ * can see where each agent is defined. Run from the project directory to see
+ * both the <project>/.pi/agents agents and the global ~/.pi/agent/agents ones.
+ */
+async function listAgentsBySource(
+  _id: string,
+  _params: unknown,
+  _signal: AbortSignal | undefined,
+  _onUpdate: (data: unknown) => void,
+  ctx: { cwd: string },
+): Promise<{ content: Array<{ type: "text"; text: string }>; details: {} }> {
+  const text = await agentsBySourceText(ctx.cwd);
+  return {
+    content: [{ type: "text", text }],
+    details: {},
+  };
+}
+
 /**
  * Registers the LLM tools.
  *
@@ -560,7 +672,9 @@ export default function (pi: ExtensionAPI) {
     label: "pi-subagents",
     description:
       "Opens a new visible pane in Herdr and launches an isolated pi subagent inside it. " +
-      "Uses Herdr's agent start/prompt/read lifecycle API for reliable execution. " +
+      "Uses Herdr's agent start/prompt/get lifecycle API for reliable execution. " +
+      "The subagent sends its summary back to the caller pane; this tool waits only for " +
+      "the subagent to reach a terminal state and never reads its raw transcript." +
       "Inherits the current model unless --model or an agent file specifies one. " +
       "Waits until the task completes and closes the pane if requested.",
     parameters: Type.Object({
@@ -639,5 +753,66 @@ export default function (pi: ExtensionAPI) {
         0,
       ),
     execute: listAgents,
+  });
+
+  pi.registerTool({
+    name: "pi-subagents-list",
+    label: "pi-subagents-list",
+    description:
+      "Lists subagents grouped by source directory (project-local <project>/.pi/agents and global ~/.pi/agent/agents) so you can see where each agent is defined. Run from the project directory to see both. Uses PI_SUBAGENTS_DIR if set.",
+    parameters: Type.Object({}),
+    renderCall: () => new Text("pi-subagents-list", 0, 0),
+    renderResult: (res) =>
+      new Text(
+        res.content.map((c) => ("text" in c ? c.text : "")).join("\n"),
+        0,
+        0,
+      ),
+    execute: listAgentsBySource,
+  });
+
+  // pi's /-autocomplete only covers commands (via registerCommand), prompt
+  // templates and skills — never tools — so the list tools are also exposed as
+  // commands. They render into the transcript as a custom message.
+  pi.registerMessageRenderer(
+    "pi-subagents-list",
+    (message, options, theme) =>
+      new Text(
+        theme.fg("accent", `[${message.customType}] `) +
+          (typeof message.content === "string" ? message.content : ""),
+        options.outputPad,
+        0,
+      ),
+  );
+
+  pi.registerCommand("pi-subagents-list", {
+    description:
+      "Lists subagents grouped by source directory (project-local <project>/.pi/agents and global ~/.pi/agent/agents) so you can see where each agent is defined. Run from the project directory to see both. Uses PI_SUBAGENTS_DIR if set.",
+    handler: async (_args, ctx) => {
+      const text = await agentsBySourceText(ctx.cwd);
+      pi.sendMessage({
+        customType: "pi-subagents-list",
+        content: text,
+        display: true,
+      });
+    },
+  });
+
+  pi.registerCommand("pi-subagents-list-agents", {
+    description:
+      "Lists the subagents defined under the pi-subagents agents directory so they can be passed to pi-subagents via --agent.",
+    handler: async (_args, ctx) => {
+      const dir = resolveAgentsDir(ctx.cwd);
+      const agents = await discoverAgents(dir);
+      const text =
+        agents.length === 0
+          ? `No agents found in ${dir}. Create a <agent-id>/AGENT.md file there with YAML frontmatter (name, description, model) and a system prompt in the body.`
+          : `Agents available in ${dir}:\n${agents.map(formatAgentLine).join("\n")}\n\nUse them with /pi-subagents --agent <id> "task".`;
+      pi.sendMessage({
+        customType: "pi-subagents-list",
+        content: text,
+        display: true,
+      });
+    },
   });
 }

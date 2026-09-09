@@ -107,7 +107,13 @@ refuses to silently inherit the current model.
 /pi-subagents --model "openai/gpt-5" --no-close "Test it and write the report"
 /pi-subagents --agent ling-tiny-worker "Reformat these three files"
 /pi-subagents-list-agents
+/pi-subagents-list
 ```
+
+`/pi-subagents-list` groups agents by source directory (project-local
+`<project>/.pi/agents` and global `~/.pi/agent/agents`) so you can see where each
+agent is defined. Run it from the project directory to see both. If
+`PI_SUBAGENTS_DIR` is set, that directory is shown instead.
 
 ## Agent files
 
