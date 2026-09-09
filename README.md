@@ -78,7 +78,7 @@ Once installed, two tools become available to the model:
 
 ```
 /pi-subagents --agent <id> "do the task"
-/pi-subagents-list-agents
+/pi-subagents-list
 ```
 
 > The examples below use slash-command syntax; pi also accepts the tool call form.
@@ -106,7 +106,6 @@ refuses to silently inherit the current model.
 /pi-subagents "Update the README"
 /pi-subagents --model "openai/gpt-5" --no-close "Test it and write the report"
 /pi-subagents --agent ling-tiny-worker "Reformat these three files"
-/pi-subagents-list-agents
 /pi-subagents-list
 ```
 
@@ -147,7 +146,7 @@ are fast but not deep. Use yourself for simple, quick tasks ...
 | Field             | Type    | Description                                        |
 | ----------------- | ------- | -------------------------------------------------- |
 | `name`            | string  | Agent display name. Defaults to the directory id.  |
-| `description`     | string  | Shown in `/pi-subagents-list-agents`.              |
+| `description`     | string  | Shown in `/pi-subagents-list`.                     |
 | `model`           | string  | Model used for this agent (`provider/id`).         |
 | `direction`       | string  | Pane split direction (`right`/`left`/`down`/`up`). |
 | `closePaneOnDone` | boolean | Close the pane on completion (`true`/`false`).     |

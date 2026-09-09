@@ -275,7 +275,7 @@ async function execute(
       content: [
         {
           type: "text",
-          text: `pi-subagents: unknown agent "${params.agent}". Run /pi-subagents-list-agents to see available agents.`,
+          text: `pi-subagents: unknown agent "${params.agent}". Run /pi-subagents-list to see available agents.`,
         },
       ],
       details: {},
@@ -549,41 +549,6 @@ async function runTask(
   };
 }
 
-async function listAgents(
-  _id: string,
-  _params: unknown,
-  _signal: AbortSignal | undefined,
-  _onUpdate: (data: unknown) => void,
-  ctx: { cwd: string },
-): Promise<{ content: Array<{ type: "text"; text: string }>; details: {} }> {
-  const dir = resolveAgentsDir(ctx.cwd);
-  const agents = await discoverAgentsIn(dir);
-  if (agents.length === 0) {
-    return {
-      content: [
-        {
-          type: "text",
-          text: `No agents found in ${dir}. Create a <agent-id>/AGENT.md file there with YAML frontmatter (name, description, model) and a system prompt in the body.`,
-        },
-      ],
-      details: {},
-    };
-  }
-  const lines = agents.map(
-    (a) =>
-      `• ${a.id} — ${a.name}${a.description ? `: ${a.description}` : ""}${a.model ? ` [model: ${a.model}]` : ""}`,
-  );
-  return {
-    content: [
-      {
-        type: "text",
-        text: `Agents available in ${dir}:\n${lines.join("\n")}\n\nUse them with /pi-subagents --agent <id> "task".`,
-      },
-    ],
-    details: {},
-  };
-}
-
 /** Builds the "• id — name: description [model]" line for one agent. */
 function formatAgentLine(a: {
   id: string;
@@ -596,7 +561,8 @@ function formatAgentLine(a: {
 
 /** Builds the "Agents available (N total)" grouped-by-source text for a cwd. */
 async function agentsBySourceText(cwd: string): Promise<string> {
-  const projectDir = findProjectAgentsDir(cwd) ?? path.join(cwd, ".pi", "agents");
+  const projectDir =
+    findProjectAgentsDir(cwd) ?? path.join(cwd, ".pi", "agents");
   const globalDir = path.join(os.homedir(), ".pi", "agent", "agents");
 
   // env override is a single explicit source; otherwise show both project + global
@@ -673,7 +639,7 @@ async function listAgentsBySource(
  *   /pi-subagents "Update the README"
  *   /pi-subagents --model "openai/gpt-5" --no-close "Test it and write the report"
  *   /pi-subagents --agent reviewer "Review these changes"
- *   /pi-subagents-list-agents
+ *   /pi-subagents-list
  */
 export default function (pi: ExtensionAPI) {
   pi.registerTool({
@@ -749,22 +715,6 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.registerTool({
-    name: "pi-subagents-list-agents",
-    label: "pi-subagents-list-agents",
-    description:
-      "Lists the subagents defined under the pi-subagents agents directory so they can be passed to pi-subagents via --agent.",
-    parameters: Type.Object({}),
-    renderCall: () => new Text("pi-subagents-list-agents", 0, 0),
-    renderResult: (res) =>
-      new Text(
-        res.content.map((c) => ("text" in c ? c.text : "")).join("\n"),
-        0,
-        0,
-      ),
-    execute: listAgents,
-  });
-
-  pi.registerTool({
     name: "pi-subagents-list",
     label: "pi-subagents-list",
     description:
@@ -799,24 +749,6 @@ export default function (pi: ExtensionAPI) {
       "Lists subagents grouped by source directory (project-local <project>/.pi/agents and global ~/.pi/agent/agents) so you can see where each agent is defined. Run from the project directory to see both. Uses PI_SUBAGENTS_DIR if set.",
     handler: async (_args, ctx) => {
       const text = await agentsBySourceText(ctx.cwd);
-      pi.sendMessage({
-        customType: "pi-subagents-list",
-        content: text,
-        display: true,
-      });
-    },
-  });
-
-  pi.registerCommand("pi-subagents-list-agents", {
-    description:
-      "Lists the subagents defined under the pi-subagents agents directory so they can be passed to pi-subagents via --agent.",
-    handler: async (_args, ctx) => {
-      const dir = resolveAgentsDir(ctx.cwd);
-      const agents = await discoverAgentsIn(dir);
-      const text =
-        agents.length === 0
-          ? `No agents found in ${dir}. Create a <agent-id>/AGENT.md file there with YAML frontmatter (name, description, model) and a system prompt in the body.`
-          : `Agents available in ${dir}:\n${agents.map(formatAgentLine).join("\n")}\n\nUse them with /pi-subagents --agent <id> "task".`;
       pi.sendMessage({
         customType: "pi-subagents-list",
         content: text,

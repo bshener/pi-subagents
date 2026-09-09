@@ -53,7 +53,7 @@ You control subagents through the **pi-subagents** tool:
 - `/pi-subagents --agent ling-tiny-worker "<task>"` — spin up the fast worker on
   a simple, well-defined task. It runs in its own pane, does the work, and closes
   itself when done.
-- `/pi-subagents-list-agents` — list available agents.
+- `/pi-subagents-list` — list available agents.
 
 The fast worker is ideal for anything short, mechanical, or one-shot. Delegate
 aggressively; only keep work that truly needs deep reasoning.
