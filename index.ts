@@ -46,8 +46,6 @@ interface PiSubagentsParams {
   task: string;
   /** The model to use. Order of precedence: this flag > agent file > current model. */
   model?: string;
-  /** Inline system prompt appended after the agent's own system prompt. */
-  systemPrompt?: string;
   /** Working directory for the pane. If omitted, the current cwd is used. */
   cwd?: string;
   /** Pane split direction: right | left | down | up. */
@@ -319,11 +317,6 @@ async function execute(
     const agentSp = await writeTempSystemPrompt(agent.systemPrompt);
     spFiles.push({ path: agentSp, owned: true });
   }
-  const inlinePrompt = params.systemPrompt?.trim();
-  if (inlinePrompt) {
-    const temp = await writeTempSystemPrompt(inlinePrompt);
-    spFiles.push({ path: temp, owned: true });
-  }
 
   try {
     const res = await runTask(
@@ -415,7 +408,6 @@ async function runTask(
   for (const f of spFiles) {
     if (f.path) piArgsAfterDashes.push("--append-system-prompt", f.path);
   }
-  // `--` passes remaining args through to pi itself (--model, --append-system-prompt, etc.).
   const buildStartArgs = () => [
     "agent",
     "start",
@@ -428,10 +420,10 @@ async function runTask(
     ...piArgsAfterDashes,
   ];
 
-  // 2) Start a named pi agent in the pane. The pane's shell is still coming up
-  //    right after `pane split`, so readiness (screen-detection based) can fail
-  //    transiently. Retry `agent_pane_busy`/`timeout` with backoff so pi has a
-  //    chance to finish starting instead of leaving the pane as a ghost.
+  //    (retry) Start a named pi agent in the pane. The pane's shell is still
+  //    coming up right after `pane split`, so readiness (screen-detection based)
+  //    can fail transiently. Retry `agent_pane_busy`/`timeout` with backoff so
+  //    pi has a chance to finish starting instead of leaving the pane as a ghost.
   let startOut = "";
   let startErr = "";
   let startCode = 0;
@@ -583,12 +575,6 @@ export default function (pi: ExtensionAPI) {
         Type.String({
           description:
             "The model to use. Overrides the agent file and the current model.",
-        }),
-      ),
-      systemPrompt: Type.Optional(
-        Type.String({
-          description:
-            "Inline system prompt appended after the agent's own system prompt.",
         }),
       ),
       cwd: Type.Optional(
