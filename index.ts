@@ -154,13 +154,22 @@ function resolveAgentsDir(cwd: string): string {
   return fs.existsSync(projectLocal) ? projectLocal : globalDir;
 }
 
-/** Lists agent definitions discovered in a single agents directory. */
-async function discoverAgents(
-  dir: string,
-): Promise<
-  Array<{ id: string; name: string; description: string; model?: string }>
-> {
-  return discoverAgentsIn(dir);
+/**
+ * Walks up from `cwd` looking for a `<dir>/.pi/agents` directory (the repo's
+ * subagent root). Returns the first match, or null if none is found before the
+ * filesystem root. This lets the list tools find project agents even when the
+ * command is invoked from a subdirectory of the repo (otherwise `cwd/.pi/agents`
+ * only exists at the repo root, so project agents would show as "(none)").
+ */
+function findProjectAgentsDir(cwd: string): string | null {
+  let dir = path.resolve(cwd);
+  const root = path.parse(dir).root;
+  for (;;) {
+    const candidate = path.join(dir, ".pi", "agents");
+    if (fs.existsSync(candidate)) return candidate;
+    if (dir === root) return null;
+    dir = path.dirname(dir);
+  }
 }
 
 /** Shared implementation used by both discoverAgents and the list tool. */
@@ -548,7 +557,7 @@ async function listAgents(
   ctx: { cwd: string },
 ): Promise<{ content: Array<{ type: "text"; text: string }>; details: {} }> {
   const dir = resolveAgentsDir(ctx.cwd);
-  const agents = await discoverAgents(dir);
+  const agents = await discoverAgentsIn(dir);
   if (agents.length === 0) {
     return {
       content: [
@@ -587,7 +596,7 @@ function formatAgentLine(a: {
 
 /** Builds the "Agents available (N total)" grouped-by-source text for a cwd. */
 async function agentsBySourceText(cwd: string): Promise<string> {
-  const projectDir = path.join(cwd, ".pi", "agents");
+  const projectDir = findProjectAgentsDir(cwd) ?? path.join(cwd, ".pi", "agents");
   const globalDir = path.join(os.homedir(), ".pi", "agent", "agents");
 
   // env override is a single explicit source; otherwise show both project + global
@@ -602,7 +611,7 @@ async function agentsBySourceText(cwd: string): Promise<string> {
     }>;
   }> = [];
   if (process.env.PI_SUBAGENTS_DIR) {
-    const agents = await discoverAgents(process.env.PI_SUBAGENTS_DIR);
+    const agents = await discoverAgentsIn(process.env.PI_SUBAGENTS_DIR);
     sources.push({
       label: `PI_SUBAGENTS_DIR (${process.env.PI_SUBAGENTS_DIR})`,
       dir: process.env.PI_SUBAGENTS_DIR,
@@ -612,12 +621,12 @@ async function agentsBySourceText(cwd: string): Promise<string> {
     sources.push({
       label: "Project (.pi/agents)",
       dir: projectDir,
-      agents: await discoverAgents(projectDir),
+      agents: await discoverAgentsIn(projectDir),
     });
     sources.push({
       label: "Global (~/.pi/agent/agents)",
       dir: globalDir,
-      agents: await discoverAgents(globalDir),
+      agents: await discoverAgentsIn(globalDir),
     });
   }
 
@@ -803,7 +812,7 @@ export default function (pi: ExtensionAPI) {
       "Lists the subagents defined under the pi-subagents agents directory so they can be passed to pi-subagents via --agent.",
     handler: async (_args, ctx) => {
       const dir = resolveAgentsDir(ctx.cwd);
-      const agents = await discoverAgents(dir);
+      const agents = await discoverAgentsIn(dir);
       const text =
         agents.length === 0
           ? `No agents found in ${dir}. Create a <agent-id>/AGENT.md file there with YAML frontmatter (name, description, model) and a system prompt in the body.`
