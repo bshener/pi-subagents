@@ -1,11 +1,18 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 
-import { AGENT_FILENAME } from "./constants";
-import { TRANSIENT_START_ERRORS, MAX_START_ATTEMPTS } from "./constants";
-import { parseAgentManifest } from "./agents";
+import { AGENT_FILENAME } from "./constants.ts";
+import {
+  TRANSIENT_START_ERRORS,
+  MAX_START_ATTEMPTS,
+  DEFAULT_TIMEOUT_MS,
+  CLOSE_RETRY_MS,
+  WORKER_OUTPUT_LINES,
+  START_BACKOFF_MS,
+} from "./constants.ts";
+import { parseAgentManifest } from "./agents.ts";
 import { AgentToolResult } from "@earendil-works/pi-coding-agent";
-import { SpFile } from "./types";
+import { SpFile } from "./types.ts";
 import {
   parseHerdrErrorCode,
   parseHerdrResult,
@@ -15,57 +22,14 @@ import {
   writeTempSystemPrompt,
   cleanupSpFiles,
   isPaneClosed,
-} from "./herdr";
-
-/** Formats a single agent entry for display. */
-export function formatAgentLine(entry: {
-  id: string;
-  name: string;
-  description: string;
-  model?: string;
-}): string {
-  const model = entry.model ?? "default";
-  return `[${entry.id}] ${entry.name} — ${entry.description} (${model})`;
-}
+} from "./herdr.ts";
 
 /** Converts a formatted agent listing string into a typed AgentToolResult. */
-function createAgentResult(text: string): AgentToolResult<unknown> {
+export function createAgentResult(text: string): AgentToolResult<unknown> {
   return {
     content: [{ type: "text", text }],
     details: {},
   };
-}
-
-/** Lists agents by source directory, scanning all agent directories under the given directory. */
-export async function listAgentsBySource(): Promise<AgentToolResult<unknown>> {
-  let dirs: string[];
-  try {
-    dirs = await fs.promises.readdir(".");
-  } catch {
-    return createAgentResult("");
-  }
-  const result: string[] = [];
-  for (const dir of dirs.sort()) {
-    const agentsDir = path.join(dir, ".pi", "agents");
-    if (!fs.existsSync(agentsDir)) continue;
-    let subdirs: string[];
-    try {
-      subdirs = await fs.promises.readdir(agentsDir);
-    } catch {
-      continue;
-    }
-    for (const subdir of subdirs.sort((a, b) => a.localeCompare(b))) {
-      const agentFile = path.join(agentsDir, subdir, AGENT_FILENAME);
-      if (fs.existsSync(agentFile)) {
-        const content = await fs.promises.readFile(agentFile, "utf8");
-        const { meta } = parseAgentManifest(content);
-        result.push(
-          `[${dir}/${subdir}] ${meta.name ?? subdir} — ${meta.description ?? ""}`,
-        );
-      }
-    }
-  }
-  return createAgentResult(result.join("\n"));
 }
 
 /** Returns a single agent's parsed model information. */
@@ -103,7 +67,7 @@ export async function execute(
         direction: "right",
         focus: false,
         closePaneOnDone: true,
-        timeoutMs: 360_000,
+        timeoutMs: DEFAULT_TIMEOUT_MS,
       },
       spFiles,
       task,
@@ -126,7 +90,7 @@ export async function execute(
 }
 
 /** Loads an agent and runs the specified task in a subagent process. */
-export async function runTask(
+async function runTask(
   opts: {
     cwd: string;
     model: string;
@@ -213,7 +177,7 @@ export async function runTask(
     const errCode = parseHerdrErrorCode(startErr || startOut);
     const transient = errCode ? TRANSIENT_START_ERRORS.has(errCode) : false;
     if (!transient || startAttempt === MAX_START_ATTEMPTS - 1) break;
-    await sleep(1_500 * (startAttempt + 1));
+    await sleep(START_BACKOFF_MS * (startAttempt + 1));
   }
   if (startCode !== 0) {
     return {
@@ -276,7 +240,7 @@ export async function runTask(
   // harness, where HERDR_PANE_ID is unset) that backchannel has nowhere to land,
   // so the summary is silently lost. Reading a bounded tail fixes that without
   // re-injecting the whole transcript.
-  const workerOutput = await readAgentOutput(agentName, 60);
+  const workerOutput = await readAgentOutput(agentName, WORKER_OUTPUT_LINES);
 
   // 4) Optionally close the pane / agent. The worker already sent its summary to the
   //    orchestrator's pane via backchannel (see step 3); we additionally read it
@@ -286,7 +250,7 @@ export async function runTask(
     await runHerdr(["pane", "close", paneId]);
     closed = await isPaneClosed(paneId);
     if (!closed) {
-      await sleep(400);
+      await sleep(CLOSE_RETRY_MS);
       await runHerdr(["pane", "close", paneId]);
       closed = await isPaneClosed(paneId);
     }

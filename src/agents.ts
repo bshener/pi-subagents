@@ -1,7 +1,6 @@
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
-import { AGENT_FILENAME } from "./constants";
+import { AGENT_FILENAME } from "./constants.ts";
 
 function parseAgentManifest(content: string): {
   meta: Record<string, string>;
@@ -15,26 +14,6 @@ function parseAgentManifest(content: string): {
     if (kv) meta[kv[1]] = kv[2].trim();
   }
   return { meta, body: m[2] };
-}
-
-/** Resolves the agents directory (env override > project-local .pi/agents > ~/.pi/agent/agents). */
-function resolveAgentsDir(cwd: string): string {
-  if (process.env.PI_SUBAGENTS_DIR) return process.env.PI_SUBAGENTS_DIR;
-  const projectLocal = path.join(cwd, ".pi", "agents");
-  const globalDir = path.join(os.homedir(), ".pi", "agent", "agents");
-  return fs.existsSync(projectLocal) ? projectLocal : globalDir;
-}
-
-/** Walks up from `cwd` looking for a `<dir>/.pi/agents` directory (the repo's subagent root). */
-function findProjectAgentsDir(cwd: string): string | null {
-  let dir = path.resolve(cwd);
-  const root = path.parse(dir).root;
-  for (;;) {
-    const candidate = path.join(dir, ".pi", "agents");
-    if (fs.existsSync(candidate)) return candidate;
-    if (dir === root) return null;
-    dir = path.dirname(dir);
-  }
 }
 
 /** Shared implementation used by both discoverAgents and the list tool. */
@@ -74,46 +53,7 @@ async function discoverAgentsIn(
   return agents;
 }
 
-/** Loads a single agent by id (directory name under the agents dir). */
-async function loadAgent(
-  id: string,
-  dir: string,
-): Promise<{
-  id: string;
-  name: string;
-  description: string;
-  model?: string;
-  systemPrompt?: string;
-  direction?: string;
-  closePaneOnDone?: boolean;
-} | null> {
-  const file = path.join(dir, id, AGENT_FILENAME);
-  let content: string;
-  try {
-    content = await fs.promises.readFile(file, "utf8");
-  } catch {
-    return null;
-  }
-  const { meta, body } = parseAgentManifest(content);
-  let closePaneOnDone: boolean | undefined;
-  if (meta.closePaneOnDone !== undefined) {
-    closePaneOnDone = meta.closePaneOnDone !== "false";
-  }
-  return {
-    id,
-    name: meta.name ?? id,
-    description: meta.description ?? "",
-    model: meta.model,
-    systemPrompt: body.trim() || undefined,
-    direction: meta.direction,
-    closePaneOnDone,
-  };
-}
-
 export {
   parseAgentManifest,
-  resolveAgentsDir,
-  findProjectAgentsDir,
   discoverAgentsIn,
-  loadAgent,
 };

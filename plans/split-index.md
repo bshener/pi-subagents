@@ -8,6 +8,8 @@ all helpers, types, and command implementations move into `src/`.
 
 **Constraint: plan only. Do not execute any changes.**
 
+> _Status: implemented as-is (PR #1). Retained as a reference of the intended module split._
+
 ---
 
 ## Current Module Layout (what lives in `index.ts` today)

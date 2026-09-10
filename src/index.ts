@@ -1,6 +1,6 @@
 import { Text } from "@earendil-works/pi-tui";
-import { execute, listAgentsBySource } from "./task.ts";
-import { agentsBySourceText } from "./list.ts";
+import { execute, createAgentResult } from "./task.ts";
+import { agentsBySourceText, listAgentsBySource } from "./list.ts";
 import { renderCall, renderResult } from "./render.ts";
 import type {
   ExtensionAPI,
@@ -11,7 +11,13 @@ import type {
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 
-export { execute, listAgentsBySource, renderCall, renderResult };
+export {
+  execute,
+  createAgentResult,
+  listAgentsBySource,
+  renderCall,
+  renderResult,
+};
 
 export default function (pi: ExtensionAPI) {
   // Register the pi-subagents tool with its execute handler.
@@ -101,7 +107,7 @@ export default function (pi: ExtensionAPI) {
       _onUpdate: AgentToolUpdateCallback<unknown> | undefined,
       _ctx: ExtensionContext,
     ) => {
-      return listAgentsBySource();
+      return createAgentResult(await listAgentsBySource());
     },
   });
 
