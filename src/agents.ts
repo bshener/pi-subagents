@@ -53,7 +53,4 @@ async function discoverAgentsIn(
   return agents;
 }
 
-export {
-  parseAgentManifest,
-  discoverAgentsIn,
-};
+export { parseAgentManifest, discoverAgentsIn };
