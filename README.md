@@ -36,7 +36,7 @@ is a type-only import and stays in `devDependencies`.
 pi install /absolute/path/to/pi-subagents
 ```
 
-This bundles the package, reads the `"pi": { "extensions": ["./index.ts"] }`
+This bundles the package, reads the `"pi": { "extensions": ["./src/index.ts"] }`
 entry, and makes the tools available in every project. Then reload pi:
 
 ```bash
@@ -52,7 +52,7 @@ its dependencies resolve:
 cp -r /absolute/path/to/pi-subagents ~/.pi/agent/extensions/pi-subagents
 ```
 
-The entry point is `~/.pi/agent/extensions/pi-subagents/index.ts`. Reload pi
+The entry point is `~/.pi/agent/extensions/pi-subagents/src/index.ts`. Reload pi
 with `/reload`.
 
 > Note: copy the directory rather than symlinking it if you want the bundled
@@ -66,7 +66,7 @@ Run pi with the extension loaded from the repo (uses the repo's own
 
 ```bash
 npm install
-npm run dev        # == pi -e ./index.ts
+npm run dev        # == pi -e ./src/index.ts
 ```
 
 This starts a new pi session with the extension active. Good for development and
@@ -168,7 +168,7 @@ Resolution order:
 ```bash
 npm install
 npm run typecheck   # tsc --noEmit
-npm run dev         # pi -e ./index.ts
+npm run dev         # pi -e ./src/index.ts
 ```
 
 ## Security
