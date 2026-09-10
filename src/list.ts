@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 
 import { AGENT_FILENAME } from "./constants";
-import { parseAgentManifest } from "./agents.ts";
+import { parseAgentManifest } from "./agents";
 
 /** Formats a single agent entry for display. */
 export function formatAgentLine(entry: {
