@@ -1,7 +1,5 @@
 import * as fs from "node:fs";
-import * as path from "node:path";
 
-import { AGENT_FILENAME } from "./constants.ts";
 import {
   TRANSIENT_START_ERRORS,
   MAX_START_ATTEMPTS,
@@ -10,7 +8,7 @@ import {
   WORKER_OUTPUT_LINES,
   START_BACKOFF_MS,
 } from "./constants.ts";
-import { parseAgentManifest } from "./agents.ts";
+import { parseAgentManifest, resolveAgentFile } from "./agents.ts";
 import { AgentToolResult } from "@earendil-works/pi-coding-agent";
 import { SpFile } from "./types.ts";
 import {
@@ -37,12 +35,32 @@ export async function execute(
   agent: string,
   task: string,
 ): Promise<AgentToolResult<unknown>> {
-  const file = path.join(agent, AGENT_FILENAME);
+  // `agent` must be a non-empty string (the tool marks it optional, so a call
+  // with no agent reaches here with agent === undefined). Reject it up front with
+  // a clear message instead of letting the later resolveAgentFile call choke on a
+  // bad id. The check is strict (typeof string, non-empty) so a non-string value
+  // can never slip through and cause a confusing error.
+  if (typeof agent !== "string" || agent.length === 0) {
+    return createAgentResult(
+      "Error: the 'agent' argument is required and must be a non-empty string " +
+        "(an agent id under the agents dir).",
+    );
+  }
+  // Resolve the agent id to its AGENT.md file following the documented order
+  // (PI_SUBAGENTS_DIR override -> project-local .pi/agents -> global agents dir).
+  // This is done outside the try so the not-found message can name the agent.
+  const file = resolveAgentFile(agent);
+  if (!file) {
+    return createAgentResult(
+      `Error: Could not find agent file for agent "${agent}" ` +
+        "(an agent id under the agents dir).",
+    );
+  }
   let content: string;
   try {
     content = await fs.promises.readFile(file, "utf8");
   } catch {
-    return createAgentResult(`Error: Could not find agent file at ${file}`);
+    return createAgentResult(`Error: Could not read agent file at ${file}`);
   }
   const { meta } = parseAgentManifest(content);
   const model = meta.model ?? "default";
@@ -240,7 +258,14 @@ async function runTask(
   // harness, where HERDR_PANE_ID is unset) that backchannel has nowhere to land,
   // so the summary is silently lost. Reading a bounded tail fixes that without
   // re-injecting the whole transcript.
-  const workerOutput = await readAgentOutput(agentName, WORKER_OUTPUT_LINES);
+  // Capture the worker's final answer BEFORE closing the pane. Guarded so a
+  // failure here can never skip the pane close below (a worker pane must not leak).
+  let workerOutput: string | undefined;
+  try {
+    workerOutput = await readAgentOutput(agentName, WORKER_OUTPUT_LINES);
+  } catch {
+    workerOutput = undefined;
+  }
 
   // 4) Optionally close the pane / agent. The worker already sent its summary to the
   //    orchestrator's pane via backchannel (see step 3); we additionally read it

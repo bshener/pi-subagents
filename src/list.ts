@@ -51,20 +51,27 @@ export async function agentsBySourceTextForCwd(cwd: string): Promise<string> {
 
 /** Groups agents by their source directory (e.g., project-local vs global). */
 export async function listAgentsBySource(): Promise<string> {
-  let dirs: string[];
-  try {
-    dirs = await fs.promises.readdir(".");
-  } catch {
-    return "";
-  }
-  const result: string[] = [];
-  for (const dir of dirs.sort((a, b) => a.localeCompare(b))) {
-    const agentsDir = path.join(dir, ".pi", "agents");
-    if (!fs.existsSync(agentsDir)) continue;
-    const agents = await discoverAgentsIn(agentsDir);
+  const lines: string[] = [];
+  // Project-local agents: scan cwd's own .pi/agents directory.
+  const projectDir = path.join(".", ".pi", "agents");
+  if (fs.existsSync(projectDir)) {
+    const agents = await discoverAgentsIn(projectDir);
     for (const a of agents) {
-      result.push(`[${dir}/${a.id}] ${a.name} — ${a.description}`);
+      lines.push(
+        `[${projectDir}] ${a.name} — ${a.description} (${a.model ?? "default"})`,
+      );
     }
   }
-  return result.join("\n");
+  // Global agents (shared across all project directories).
+  const globalDir = globalAgentsDir();
+  if (fs.existsSync(globalDir)) {
+    const agents = await discoverAgentsIn(globalDir);
+    for (const a of agents) {
+      lines.push(
+        `[${globalDir}] ${a.name} — ${a.description} (${a.model ?? "default"})`,
+      );
+    }
+  }
+  if (lines.length === 0) return "(no agents found)";
+  return lines.join("\n");
 }

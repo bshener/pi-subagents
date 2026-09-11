@@ -76,14 +76,85 @@ async function cleanupSpFiles(spFiles: SpFile[]): Promise<void> {
 }
 
 /**
- * Reads a bounded tail of an agent's terminal output.
+ * Reads the worker's final textual answer from its session JSONL.
  *
- * Used to capture the worker's summary so the caller actually receives the
- * result. `--source recent --format text --lines N` keeps this cheap and avoids
- * re-injecting the worker's entire transcript (the "context bloat" the
- * backchannel design was trying to avoid).
+ * The naive approach (`herdr agent read --source recent --format text`) returns
+ * the pane's raw terminal snapshot, which includes pi's UI chrome — startup
+ * banner, Skills/Extensions lists, status bar — not just the worker's answer.
+ * Instead we resolve the agent's session path via `herdr agent get` and extract
+ * the last assistant `text` content block: the worker's actual answer, with no
+ * UI noise. Thinking/tool-call blocks are skipped so only meaningful prose is
+ * returned. `lines` bounds the returned text (honours the bounded-output intent).
  */
 async function readAgentOutput(
+  agentName: string,
+  lines: number,
+): Promise<string | undefined> {
+  const sessionPath = await resolveAgentSessionPath(agentName);
+  if (!sessionPath) {
+    // Fallback: if the session path can't be resolved (e.g. a future herdr API
+    // change) fall back to the bounded terminal snapshot rather than losing the
+    // summary entirely.
+    return readTerminalOutput(agentName, lines);
+  }
+  const text = extractLastAssistantText(sessionPath);
+  if (text === undefined) return undefined;
+  return boundToLines(text, lines);
+}
+
+/** Resolves a named agent's session JSONL path via `herdr agent get`. */
+async function resolveAgentSessionPath(
+  agentName: string,
+): Promise<string | undefined> {
+  const { stdout, code } = await runHerdr(["agent", "get", agentName]);
+  if (code !== 0) return undefined;
+  const line = stdout
+    .split("\n")
+    .map((l) => l.trim())
+    .find((l) => l.startsWith("{"));
+  if (!line) return undefined;
+  try {
+    const obj = JSON.parse(line);
+    return obj?.result?.agent?.agent_session?.value;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Extracts the last assistant `text` block from a session JSONL, skipping
+ * thinking/tool-call blocks. Returns undefined if there is no such block. */
+function extractLastAssistantText(sessionPath: string): string | undefined {
+  let last: string | undefined;
+  try {
+    const raw = fs.readFileSync(sessionPath, "utf8");
+    for (const line of raw.split("\n")) {
+      const t = line.trim();
+      if (!t) continue;
+      let rec: unknown;
+      try {
+        rec = JSON.parse(t);
+      } catch {
+        continue;
+      }
+      const msg = (rec as { message?: unknown })?.message as
+        | { role?: string; content?: unknown[] }
+        | undefined;
+      if (!msg || msg.role !== "assistant") continue;
+      for (const blk of msg.content ?? []) {
+        const b = blk as { type?: string; text?: string };
+        if (b?.type === "text" && b.text?.trim()) {
+          last = b.text.trim();
+        }
+      }
+    }
+  } catch {
+    return undefined;
+  }
+  return last;
+}
+
+/** Reads a bounded tail of an agent's raw terminal output (fallback path). */
+async function readTerminalOutput(
   agentName: string,
   lines: number,
 ): Promise<string | undefined> {
@@ -100,6 +171,12 @@ async function readAgentOutput(
   ]);
   if (code !== 0) return undefined;
   return stdout.trim();
+}
+
+/** Keeps the last `lines` lines of a text block (bounds returned output). */
+function boundToLines(text: string, lines: number): string {
+  const parts = text.split("\n");
+  return parts.slice(Math.max(0, parts.length - lines)).join("\n");
 }
 
 /** Returns true once the pane no longer exists in herdr (i.e. it was closed). */

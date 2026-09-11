@@ -1,4 +1,5 @@
 import { Text } from "@earendil-works/pi-tui";
+import { Type } from "typebox";
 import { execute, createAgentResult } from "./task.ts";
 import { agentsBySourceTextForCwd, listAgentsBySource } from "./list.ts";
 import { renderCall, renderResult } from "./render.ts";
@@ -32,51 +33,54 @@ export default function (pi: ExtensionAPI) {
       "the subagent to reach a terminal state and never reads its raw transcript." +
       "Inherits the current model unless --model or an agent file specifies one. " +
       "Waits until the task completes and closes the pane if requested.",
-    parameters: {
-      agent: {
-        type: "string",
-        description:
-          "Agent id (directory name under the agents dir). Loads that agent's model + system prompt.",
-        optional: true,
+    parameters: Type.Object(
+      {
+        agent: Type.String({
+          description:
+            "Agent id (directory name under the agents dir). Loads that agent's model + system prompt.",
+        }),
+        task: Type.String({
+          description: "The task the subagent will perform.",
+        }),
+        model: Type.Optional(
+          Type.String({
+            description:
+              "The model to use. Overrides the agent file and the current model.",
+          }),
+        ),
+        cwd: Type.Optional(
+          Type.String({
+            description:
+              "Working directory for the pane. If omitted, the current cwd is used.",
+          }),
+        ),
+        direction: Type.Optional(
+          Type.Enum(
+            { right: "right", left: "left", down: "down", up: "up" } as const,
+            {
+              description: "Pane split direction.",
+            },
+          ),
+        ),
+        focus: Type.Optional(
+          Type.Boolean({
+            description: "Should the new pane take focus? Default: false.",
+          }),
+        ),
+        closePaneOnDone: Type.Optional(
+          Type.Boolean({
+            description:
+              "Close the pane when the task completes? Default: true.",
+          }),
+        ),
+        timeoutMs: Type.Optional(
+          Type.Number({
+            description: "Maximum wait time in ms. Default: 360000.",
+          }),
+        ),
       },
-      task: {
-        type: "string",
-        description: "The task the subagent will perform.",
-      },
-      model: {
-        type: "string",
-        description:
-          "The model to use. Overrides the agent file and the current model.",
-        optional: true,
-      },
-      cwd: {
-        type: "string",
-        description:
-          "Working directory for the pane. If omitted, the current cwd is used.",
-        optional: true,
-      },
-      direction: {
-        type: "enum",
-        values: ["right", "left", "down", "up"],
-        description: "Pane split direction.",
-        optional: true,
-      },
-      focus: {
-        type: "boolean",
-        description: "Should the new pane take focus? Default: false.",
-        optional: true,
-      },
-      closePaneOnDone: {
-        type: "boolean",
-        description: "Close the pane when the task completes? Default: true.",
-        optional: true,
-      },
-      timeoutMs: {
-        type: "number",
-        description: "Maximum wait time in ms. Default: 360000.",
-        optional: true,
-      },
-    },
+      { required: ["agent", "task"] },
+    ),
     renderCall,
     renderResult,
     execute: async (
@@ -156,7 +160,7 @@ export default function (pi: ExtensionAPI) {
   // Register the message renderer for the pi-subagents-doctor command output.
   pi.registerMessageRenderer(
     "pi-subagents-doctor",
-    (message: any, options: MessageRenderOptions, theme: Theme) =>
+    (message: any, options: MessageRenderOptions, _theme: Theme) =>
       new Text(message.content, options.outputPad, 0),
   );
 }

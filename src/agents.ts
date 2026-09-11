@@ -1,4 +1,5 @@
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import { AGENT_FILENAME } from "./constants.ts";
 
@@ -14,6 +15,37 @@ function parseAgentManifest(content: string): {
     if (kv) meta[kv[1]] = kv[2].trim();
   }
   return { meta, body: m[2] };
+}
+
+/** Resolves an agent id to its AGENT.md file, following the documented order:
+ *  1. PI_SUBAGENTS_DIR environment override
+ *  2. <cwd>/.pi/agents (project-local)
+ *  3. ~/.pi/agent/agents (global)
+ * Returns the file path, or null if no agent file is found. */
+export function resolveAgentFile(
+  agent: string,
+  cwd: string = process.cwd(),
+): string | null {
+  // 1. Explicit PI_SUBAGENTS_DIR override.
+  const override = process.env.PI_SUBAGENTS_DIR;
+  if (override) {
+    const file = path.join(override, agent, AGENT_FILENAME);
+    if (fs.existsSync(file)) return file;
+  }
+  // 2. Project-local .pi/agents.
+  const projectFile = path.join(cwd, ".pi", "agents", agent, AGENT_FILENAME);
+  if (fs.existsSync(projectFile)) return projectFile;
+  // 3. Global agents dir.
+  const globalFile = path.join(
+    os.homedir(),
+    ".pi",
+    "agent",
+    "agents",
+    agent,
+    AGENT_FILENAME,
+  );
+  if (fs.existsSync(globalFile)) return globalFile;
+  return null;
 }
 
 /** Shared implementation used by both discoverAgents and the list tool. */
