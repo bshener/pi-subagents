@@ -1,7 +1,8 @@
 import { Text } from "@earendil-works/pi-tui";
 import { execute, createAgentResult } from "./task.ts";
-import { agentsBySourceText, listAgentsBySource } from "./list.ts";
+import { agentsBySourceTextForCwd, listAgentsBySource } from "./list.ts";
 import { renderCall, renderResult } from "./render.ts";
+import { formatDoctorReport, runDoctor } from "./doctor.ts";
 import type {
   ExtensionAPI,
   MessageRenderOptions,
@@ -127,7 +128,7 @@ export default function (pi: ExtensionAPI) {
     description:
       "Lists subagents grouped by source directory (project-local <project>/.pi/agents and global ~/.pi/agent/agents) so you can see where each agent is defined. Run from the project directory to see both. Uses PI_SUBAGENTS_DIR if set.",
     handler: async (_args: string, ctx: ExtensionCommandContext) => {
-      const text = await agentsBySourceText(ctx.cwd);
+      const text = await agentsBySourceTextForCwd(ctx.cwd);
       pi.sendMessage({
         customType: "pi-subagents-list",
         content: text,
@@ -135,4 +136,27 @@ export default function (pi: ExtensionAPI) {
       });
     },
   });
+
+  // Register the pi-subagents-doctor command: reports whether this extension is
+  // actually loaded in the current session by inspecting its own registered
+  // command + tools.
+  pi.registerCommand("pi-subagents-doctor", {
+    description:
+      "Checks whether the pi-subagents extension is loaded in the current session and reports the status of its registered command and tools.",
+    handler: async (_args: string, _ctx: ExtensionCommandContext) => {
+      const report = runDoctor(pi);
+      pi.sendMessage({
+        customType: "pi-subagents-doctor",
+        content: formatDoctorReport(report),
+        display: true,
+      });
+    },
+  });
+
+  // Register the message renderer for the pi-subagents-doctor command output.
+  pi.registerMessageRenderer(
+    "pi-subagents-doctor",
+    (message: any, options: MessageRenderOptions, theme: Theme) =>
+      new Text(message.content, options.outputPad, 0),
+  );
 }

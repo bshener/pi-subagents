@@ -1,7 +1,7 @@
 ---
 name: ling-tiny-worker
 description: Fast basic-task worker using the lightweight model. Use this for simple, quick tasks when you need the fastest possible results.
-model: llama-cpp2/Ling-Tiny
+model: llama-swap/Ling-Tiny
 ---
 
 # ling-tiny-worker
