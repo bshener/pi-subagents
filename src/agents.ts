@@ -85,4 +85,56 @@ async function discoverAgentsIn(
   return agents;
 }
 
+/**
+ * Synchronous sibling of discoverAgentsIn(): reads the agent dirs with sync fs
+ * so it can run at extension load time (before a session cwd is available).
+ * Used to register the /subagent:<id> slash commands up front.
+ */
+export function discoverAgentsSync(
+  dir: string,
+): Array<{ id: string; name: string; description: string; model?: string }> {
+  let entries: string[];
+  try {
+    entries = fs.readdirSync(dir);
+  } catch {
+    return [];
+  }
+  const agents: Array<{
+    id: string;
+    name: string;
+    description: string;
+    model?: string;
+  }> = [];
+  for (const entry of entries.sort((a, b) => a.localeCompare(b))) {
+    const agentFile = path.join(dir, entry, AGENT_FILENAME);
+    let content: string;
+    try {
+      content = fs.readFileSync(agentFile, "utf8");
+    } catch {
+      continue; // Not an agent directory (no AGENT.md).
+    }
+    const { meta } = parseAgentManifest(content);
+    agents.push({
+      id: entry,
+      name: meta.name ?? entry,
+      description: meta.description ?? "",
+      model: meta.model,
+    });
+  }
+  return agents;
+}
+
+/**
+ * Sibling of resolveAgentFile() that returns the agents *directory* (not a file)
+ * for a given cwd, following the documented order. Synchronous so it can run at
+ * extension load time to register /subagent:<id> commands.
+ */
+export function resolveAgentsDir(cwd: string): string {
+  const override = process.env.PI_SUBAGENTS_DIR;
+  if (override) return override;
+  const projectLocal = path.join(cwd, ".pi", "agents");
+  if (fs.existsSync(projectLocal)) return projectLocal;
+  return path.join(os.homedir(), ".pi", "agent", "agents");
+}
+
 export { parseAgentManifest, discoverAgentsIn };

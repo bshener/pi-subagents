@@ -5,6 +5,7 @@ import { THINKING_LEVELS } from "./constants.ts";
 import { agentsBySourceTextForCwd, listAgentsBySource } from "./list.ts";
 import { renderCall, renderResult } from "./render.ts";
 import { formatDoctorReport, runDoctor } from "./doctor.ts";
+import { discoverAgentsSync, resolveAgentsDir } from "./agents.ts";
 import type {
   ExtensionAPI,
   MessageRenderOptions,
@@ -173,10 +174,70 @@ export default function (pi: ExtensionAPI) {
     },
   });
 
+  // Register a /subagent:<agent-id> slash command for each discovered agent, so
+  // they are discoverable from the "/" menu under the "subagent:" prefix
+  // (e.g. /subagent:ling-tiny-worker "<task>"). Registered commands are shown
+  // by pi's built-in slash-command autocomplete, so this doubles as the agent
+  // menu. Best-effort: a failure here must not break the extension, since the
+  // /pi-subagents tool still works.
+  registerAgentCommands(pi);
+
   // Register the message renderer for the pi-subagents-doctor command output.
   pi.registerMessageRenderer(
     "pi-subagents-doctor",
     (message: any, options: MessageRenderOptions, _theme: Theme) =>
       new Text(message.content, options.outputPad, 0),
   );
+}
+
+/**
+ * Registers one /subagent:<agent-id> command per discovered agent. The command
+ * launches the agent in its own Herdr pane (via the same execute() path as the
+ * tool) and reports launch + completion status as notifications without blocking
+ * the caller, so several agents can be fired off in sequence.
+ */
+function registerAgentCommands(pi: ExtensionAPI): void {
+  let agents: Array<{ id: string; name: string; description: string }>;
+  try {
+    agents = discoverAgentsSync(resolveAgentsDir(process.cwd())).map((a) => ({
+      id: a.id,
+      name: a.name ?? a.id,
+      description: a.description ?? "",
+    }));
+  } catch {
+    agents = [];
+  }
+  for (const agent of agents) {
+    pi.registerCommand(`subagent:${agent.id}`, {
+      description: [
+        `Launch the ${agent.name} sub-agent (opens a Herdr pane, runs the task, closes it).`,
+        agent.description || undefined,
+      ]
+        .filter((line): line is string => Boolean(line))
+        .join(" "),
+      handler: (args: string, ctx: ExtensionCommandContext) => {
+        const task = (args ?? "").trim();
+        if (!task) {
+          ctx.ui.notify(`Usage: /subagent:${agent.id} "<task>"`);
+          return Promise.resolve();
+        }
+        ctx.ui.notify(`▶ Launching sub-agent "${agent.id}"…`);
+        // Fire-and-forget: the subagent runs in its own Herdr pane, so the
+        // caller is not blocked. execute() is already error-safe (returns a
+        // result), but keep a catch for the unexpected.
+        return execute(agent.id, task, {})
+          .then((res) => {
+            const text = res.content
+              .map((c) => ("text" in c ? c.text : ""))
+              .join("\n");
+            ctx.ui.notify(text);
+          })
+          .catch((err) => {
+            ctx.ui.notify(
+              `pi-subagents: ${err instanceof Error ? err.message : String(err)}`,
+            );
+          });
+      },
+    });
+  }
 }

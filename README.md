@@ -81,6 +81,21 @@ Once installed, two tools become available to the model:
 /pi-subagents-list
 ```
 
+On top of those, one **`/subagent:<agent-id>` slash command** is registered for
+each discovered agent (project-local and global). They appear in the `/` menu
+under the `subagent:` prefix, so you can fire an agent straight from the command
+line without a tool call:
+
+```
+/subagent:ling-tiny-worker "Reformat these three files"
+/subagent:tiel-coder-worker "Write a plan for X"
+```
+
+The command launches the agent in its own Herdr pane (same path as the
+`/pi-subagents` tool) and reports launch + completion status as notifications.
+Agents are discovered at load time from `process.cwd()`, so add a new agent to
+`.pi/agents` (or the global dir) and reload pi to see its command.
+
 > The examples below use slash-command syntax; pi also accepts the tool call form.
 
 ### `pi-subagents` parameters
@@ -113,6 +128,10 @@ refuses to silently inherit the current model.
 `<project>/.pi/agents` and global `~/.pi/agent/agents`) so you can see where each
 agent is defined. Run it from the project directory to see both. If
 `PI_SUBAGENTS_DIR` is set, that directory is shown instead.
+
+`/pi-subagents` and `/pi-subagents-list` also accept the tool-call form
+(`pi-subagents` / `pi-subagents-list` from the `/` menu), whereas the
+`/subagent:<id>` commands are slash commands only.
 
 ## Agent files
 
