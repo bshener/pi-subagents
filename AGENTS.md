@@ -44,6 +44,14 @@ message renderer, and a `/pi-subagents-list` command.
 - `src/render.ts` — `renderCall` / `renderResult` (how tool calls/results display).
 - `src/doctor.ts` — `/pi-subagents-doctor` reports whether the extension is loaded.
 
+## `thinkingLevel` (tool arg + agent frontmatter)
+
+- Tool arg `thinkingLevel` agent frontmatter `thinkingLevel`'ı ezer.
+- Frontmatter `thinkingLevel` pi'nin kendi default'unu ezer; ikisi de yoksa pi
+  eşzamanlı oturumun seviyesini korur (`--thinking`'a hiçbir şey gönderilmez).
+- Değerler: `off | minimal | low | medium | high | xhigh | max` (pi'ye
+  `herdr agent start ... -- --thinking <level>` olarak iletilir).
+
 ## Agent files (`AGENT.md`)
 
 ```
@@ -51,6 +59,7 @@ message renderer, and a `/pi-subagents-list` command.
 name: <id>
 description: <one line, shown in tool schema>
 model: <model id, or omit for "default">
+thinkingLevel: off          # optional, per-agent default: off|minimal|low|medium|high|xhigh|max
 direction: right            # optional, per-agent default split
 closePaneOnDone: true       # optional
 ---

@@ -8,6 +8,8 @@ import {
   WORKER_OUTPUT_LINES,
   START_BACKOFF_MS,
 } from "./constants.ts";
+import type { ThinkingLevel } from "./constants.ts";
+import { THINKING_LEVELS } from "./constants.ts";
 import { parseAgentManifest, resolveAgentFile } from "./agents.ts";
 import { AgentToolResult } from "@earendil-works/pi-coding-agent";
 import { SpFile } from "./types.ts";
@@ -30,10 +32,21 @@ export function createAgentResult(text: string): AgentToolResult<unknown> {
   };
 }
 
+/** Coerces a raw string into a valid ThinkingLevel, or undefined if invalid. */
+function normalizeThinkingLevel(
+  value: string | undefined,
+): ThinkingLevel | undefined {
+  if (!value) return undefined;
+  return (THINKING_LEVELS as readonly string[]).includes(value)
+    ? (value as ThinkingLevel)
+    : undefined;
+}
+
 /** Returns a single agent's parsed model information. */
 export async function execute(
   agent: string,
   task: string,
+  options: { thinkingLevel?: string } = {},
 ): Promise<AgentToolResult<unknown>> {
   // `agent` must be a non-empty string (the tool marks it optional, so a call
   // with no agent reaches here with agent === undefined). Reject it up front with
@@ -65,6 +78,12 @@ export async function execute(
   const { meta } = parseAgentManifest(content);
   const model = meta.model ?? "default";
   const systemPrompt = meta.systemPrompt ?? "";
+  // Thinking level precedence: explicit tool argument beats the agent's
+  // frontmatter default. When neither is set, pi keeps its own default (which
+  // inherits the dispatching session's level), so we pass nothing.
+  const thinkingLevel = normalizeThinkingLevel(
+    options.thinkingLevel ?? meta.thinkingLevel,
+  );
 
   // Build the system prompt files to pass to pi (--append-system-prompt).
   // The agent's system prompt is the markdown BODY of its md file (everything
@@ -82,6 +101,7 @@ export async function execute(
       {
         cwd: process.cwd(),
         model,
+        thinkingLevel,
         direction: "right",
         focus: false,
         closePaneOnDone: true,
@@ -112,6 +132,7 @@ async function runTask(
   opts: {
     cwd: string;
     model: string;
+    thinkingLevel?: ThinkingLevel;
     direction: string;
     focus: boolean;
     closePaneOnDone: boolean;
@@ -163,6 +184,9 @@ async function runTask(
   //    --kind pi selects the canonical pi executable; -- passes remaining args
   //    through to pi itself (--model, --append-system-prompt, etc.).
   const piArgsAfterDashes = ["--model", opts.model];
+  if (opts.thinkingLevel) {
+    piArgsAfterDashes.push("--thinking", opts.thinkingLevel);
+  }
   for (const f of spFiles) {
     if (f.path) piArgsAfterDashes.push("--append-system-prompt", f.path);
   }
@@ -281,7 +305,8 @@ async function runTask(
     }
   }
 
-  const status = `pi-subagents: pane ${paneId} • ${opts.model} • agent ${agentName} • ${
+  const tl = opts.thinkingLevel ? ` • thinking:${opts.thinkingLevel}` : "";
+  const status = `pi-subagents: pane ${paneId} • ${opts.model}${tl} • agent ${agentName} • ${
     done ? "task completed" : "timed out"
   } • ${opts.closePaneOnDone ? (closed ? "pane closed" : "pane still open") : "pane open"}`;
 
@@ -297,6 +322,7 @@ async function runTask(
     details: {
       paneId,
       model: opts.model,
+      thinkingLevel: opts.thinkingLevel,
       agent: agentName,
       done,
       closed,

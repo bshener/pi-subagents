@@ -18,6 +18,28 @@ export const WORKER_OUTPUT_LINES = 60;
 // The per-attempt readiness timeout is left to Herdr's default (30s) on purpose:
 // a cold llama.cpp model can take a while, and shortening it would regress the
 // cold-start case that the original default handled fine.
+// Thinking levels accepted by pi (`--thinking <level>`). Kept in one place so the
+// tool schema and the agent frontmatter both validate against the same set.
+export const THINKING_LEVELS = [
+  "off",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+] as const;
+export type ThinkingLevel = (typeof THINKING_LEVELS)[number];
+
+// `agent start` readiness is screen-detection based: Herdr only succeeds once
+// pi has fully launched and rendered inside the freshly split pane. Right after
+// `pane split` the pane's shell is still coming up, so the first attempt often
+// fails with a transient error. These codes mean "pi isn't ready yet" (as
+// opposed to a real misconfiguration), so we retry them with backoff instead of
+// abandoning the already-allocated pane — which would leave a ghost/host pane.
+// The per-attempt readiness timeout is left to Herdr's default (30s) on purpose:
+// a cold llama.cpp model can take a while, and shortening it would regress the
+// cold-start case that the original default handled fine.
 export const TRANSIENT_START_ERRORS = new Set(["agent_pane_busy", "timeout"]);
 export const MAX_START_ATTEMPTS = 3; // bounds worst case to ~3×30s if pi never starts
 export const START_BACKOFF_MS = 1_500;

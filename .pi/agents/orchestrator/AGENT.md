@@ -2,6 +2,7 @@
 name: orchestrator
 description: Orchestrates multi-step work. Routes simple, fast tasks to ling-tiny-worker and handles complex tasks itself. Use this when a request could be split between quick delegation and deep work.
 model: llama-cpp/Tiel-Coder
+thinkingLevel: high
 direction: right
 closePaneOnDone: true
 ---

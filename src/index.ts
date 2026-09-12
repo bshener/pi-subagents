@@ -1,6 +1,7 @@
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { execute, createAgentResult } from "./task.ts";
+import { THINKING_LEVELS } from "./constants.ts";
 import { agentsBySourceTextForCwd, listAgentsBySource } from "./list.ts";
 import { renderCall, renderResult } from "./render.ts";
 import { formatDoctorReport, runDoctor } from "./doctor.ts";
@@ -48,6 +49,19 @@ export default function (pi: ExtensionAPI) {
               "The model to use. Overrides the agent file and the current model.",
           }),
         ),
+        thinkingLevel: Type.Optional(
+          Type.Enum(
+            {
+              ...Object.fromEntries(THINKING_LEVELS.map((l) => [l, l])),
+            } as const,
+            {
+              description:
+                "Thinking level for the subagent (off/minimal/low/medium/high/xhigh/max). " +
+                "Overrides the agent file's frontmatter and the current model. If omitted, " +
+                "the agent file default is used, otherwise pi keeps its own default.",
+            },
+          ),
+        ),
         cwd: Type.Optional(
           Type.String({
             description:
@@ -92,7 +106,9 @@ export default function (pi: ExtensionAPI) {
     ) => {
       const agent = _params.agent as string;
       const task = _params.task as string;
-      return execute(agent, task);
+      return execute(agent, task, {
+        thinkingLevel: _params.thinkingLevel as string | undefined,
+      });
     },
   });
 
