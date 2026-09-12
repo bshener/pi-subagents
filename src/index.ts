@@ -204,7 +204,9 @@ export default function (pi: ExtensionAPI) {
  * the content-part shape so both text and image parts typecheck; only the `text`
  * field is read, everything else is ignored.
  */
-function toPlainText(content: string | Array<{ type: string; text?: unknown }>): string {
+function toPlainText(
+  content: string | Array<{ type: string; text?: unknown }>,
+): string {
   if (!Array.isArray(content)) return content;
   return content.map((c) => ("text" in c ? String(c.text) : "")).join("\n");
 }
