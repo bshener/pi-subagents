@@ -1,6 +1,10 @@
 export const HERDR_BIN = process.env.HERDR_BIN ?? "herdr";
 export const DEFAULT_TIMEOUT_MS = 360_000; // 3 minutes
 export const AGENT_FILENAME = "AGENT.md";
+// Optional spawner contract: "<agent-dir>/USAGE.md" holds instructions for the
+// *parent* agent (how to spawn this agent: timeouts, task contents, gotchas).
+// The runner itself never reads it; `pi-subagents-list` flags its presence.
+export const USAGE_FILENAME = "USAGE.md";
 // How long to wait before retrying a close that raced with the agent exiting.
 export const CLOSE_RETRY_MS = 400;
 // How many recent lines of the worker's terminal to read back so the caller

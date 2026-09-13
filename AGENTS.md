@@ -52,7 +52,8 @@ reload.
 + `src/herdr.ts` — `runHerdr()` wrapper, result/error parsing, temp files, sleep.
 + `src/agents.ts` — `parseAgentManifest()`, `discoverAgentsIn()` (async), and the
   sync siblings `discoverAgentsSync()` + `resolveAgentsDir()` used to register
-  the `/subagent:<id>` commands at load time.
+  the `/subagent:<id>` commands at load time. Also `resolveAgentUsageFile()` +
+  `DiscoveredAgent.hasUsage` for the optional `USAGE.md` spawner contract.
 + `src/constants.ts` — `HERDR_BIN`, timeouts, `AGENT_FILENAME`, retry/backoff.
 + `src/render.ts` — `renderCall` / `renderResult` (how tool calls/results display).
 + `src/doctor.ts` — `/pi-subagents-doctor` reports whether the extension is loaded.
@@ -84,6 +85,10 @@ Agent dirs scanned (run from a project dir to see both):
 + Project: `<repo>/.pi/agents/<id>/AGENT.md`
 + Global: `~/.pi/agent/agents/<id>/AGENT.md` (i.e. `os.homedir()/.pi/agent/agents`)
 + Also honors `PI_SUBAGENTS_DIR` env override.
+
+An agent dir may also contain an optional `USAGE.md` — the spawner contract for
+the parent agent (timeouts, task contents, gotchas). The runner never reads it;
+`pi-subagents-list` marks such agents with `[+usage]`. See README for format.
 
 ## Conventions / gotchas
 

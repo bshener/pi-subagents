@@ -2,17 +2,17 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
-import { discoverAgentsIn } from "./agents.ts";
+import { discoverAgentsIn, type DiscoveredAgent } from "./agents.ts";
+
+/** Marker appended (only) when the agent ships a USAGE.md spawner contract. */
+function usageMarker(a: Pick<DiscoveredAgent, "hasUsage">): string {
+  return a.hasUsage ? " [+usage]" : "";
+}
 
 /** Formats a single agent entry for display. */
-function formatAgentLine(entry: {
-  id: string;
-  name: string;
-  description: string;
-  model?: string;
-}): string {
+function formatAgentLine(entry: DiscoveredAgent): string {
   const model = entry.model ?? "default";
-  return `[${entry.id}] ${entry.name} — ${entry.description} (${model})`;
+  return `[${entry.id}] ${entry.name} — ${entry.description} (${model})${usageMarker(entry)}`;
 }
 
 /** Lists agents by source text, scanning all agent directories under the given directory. */
@@ -35,14 +35,14 @@ export async function agentsBySourceTextForCwd(cwd: string): Promise<string> {
   const projectAgents = await discoverAgentsIn(projectDir);
   for (const a of projectAgents) {
     lines.push(
-      `[${projectDir}] ${a.name} — ${a.description} (${a.model ?? "default"})`,
+      `[${projectDir}] ${a.name} — ${a.description} (${a.model ?? "default"})${usageMarker(a)}`,
     );
   }
   const globalDir = globalAgentsDir();
   const globalAgents = await discoverAgentsIn(globalDir);
   for (const a of globalAgents) {
     lines.push(
-      `[${globalDir}] ${a.name} — ${a.description} (${a.model ?? "default"})`,
+      `[${globalDir}] ${a.name} — ${a.description} (${a.model ?? "default"})${usageMarker(a)}`,
     );
   }
   if (lines.length === 0) return "(no agents found)";
@@ -58,7 +58,7 @@ export async function listAgentsBySource(): Promise<string> {
     const agents = await discoverAgentsIn(projectDir);
     for (const a of agents) {
       lines.push(
-        `[${projectDir}] ${a.name} — ${a.description} (${a.model ?? "default"})`,
+        `[${projectDir}] ${a.name} — ${a.description} (${a.model ?? "default"})${usageMarker(a)}`,
       );
     }
   }
@@ -68,7 +68,7 @@ export async function listAgentsBySource(): Promise<string> {
     const agents = await discoverAgentsIn(globalDir);
     for (const a of agents) {
       lines.push(
-        `[${globalDir}] ${a.name} — ${a.description} (${a.model ?? "default"})`,
+        `[${globalDir}] ${a.name} — ${a.description} (${a.model ?? "default"})${usageMarker(a)}`,
       );
     }
   }

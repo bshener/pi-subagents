@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { AGENT_FILENAME } from "./constants.ts";
+import { AGENT_FILENAME, USAGE_FILENAME } from "./constants.ts";
 
 function parseAgentManifest(content: string): {
   meta: Record<string, string>;
@@ -48,24 +48,25 @@ export function resolveAgentFile(
   return null;
 }
 
+/** One discovered agent: manifest fields plus USAGE.md presence. */
+export interface DiscoveredAgent {
+  id: string;
+  name: string;
+  description: string;
+  model?: string;
+  /** True when `<agent-dir>/USAGE.md` (spawner contract) is present. */
+  hasUsage: boolean;
+}
+
 /** Shared implementation used by both discoverAgents and the list tool. */
-async function discoverAgentsIn(
-  dir: string,
-): Promise<
-  Array<{ id: string; name: string; description: string; model?: string }>
-> {
+async function discoverAgentsIn(dir: string): Promise<Array<DiscoveredAgent>> {
   let entries: string[];
   try {
     entries = await fs.promises.readdir(dir);
   } catch {
     return [];
   }
-  const agents: Array<{
-    id: string;
-    name: string;
-    description: string;
-    model?: string;
-  }> = [];
+  const agents: Array<DiscoveredAgent> = [];
   for (const entry of entries.sort((a, b) => a.localeCompare(b))) {
     const agentFile = path.join(dir, entry, AGENT_FILENAME);
     let content: string;
@@ -80,6 +81,7 @@ async function discoverAgentsIn(
       name: meta.name ?? entry,
       description: meta.description ?? "",
       model: meta.model,
+      hasUsage: fs.existsSync(path.join(dir, entry, USAGE_FILENAME)),
     });
   }
   return agents;
@@ -90,21 +92,14 @@ async function discoverAgentsIn(
  * so it can run at extension load time (before a session cwd is available).
  * Used to register the /subagent:<id> slash commands up front.
  */
-export function discoverAgentsSync(
-  dir: string,
-): Array<{ id: string; name: string; description: string; model?: string }> {
+export function discoverAgentsSync(dir: string): Array<DiscoveredAgent> {
   let entries: string[];
   try {
     entries = fs.readdirSync(dir);
   } catch {
     return [];
   }
-  const agents: Array<{
-    id: string;
-    name: string;
-    description: string;
-    model?: string;
-  }> = [];
+  const agents: Array<DiscoveredAgent> = [];
   for (const entry of entries.sort((a, b) => a.localeCompare(b))) {
     const agentFile = path.join(dir, entry, AGENT_FILENAME);
     let content: string;
@@ -119,9 +114,38 @@ export function discoverAgentsSync(
       name: meta.name ?? entry,
       description: meta.description ?? "",
       model: meta.model,
+      hasUsage: fs.existsSync(path.join(dir, entry, USAGE_FILENAME)),
     });
   }
   return agents;
+}
+
+/**
+ * Sibling of resolveAgentFile() for the spawner contract: resolves an agent id
+ * to its USAGE.md file, following the same order. Returns the file path, or
+ * null when the agent has no USAGE.md (the contract is optional).
+ */
+export function resolveAgentUsageFile(
+  agent: string,
+  cwd: string = process.cwd(),
+): string | null {
+  const override = process.env.PI_SUBAGENTS_DIR;
+  if (override) {
+    const file = path.join(override, agent, USAGE_FILENAME);
+    if (fs.existsSync(file)) return file;
+  }
+  const projectFile = path.join(cwd, ".pi", "agents", agent, USAGE_FILENAME);
+  if (fs.existsSync(projectFile)) return projectFile;
+  const globalFile = path.join(
+    os.homedir(),
+    ".pi",
+    "agent",
+    "agents",
+    agent,
+    USAGE_FILENAME,
+  );
+  if (fs.existsSync(globalFile)) return globalFile;
+  return null;
 }
 
 /**

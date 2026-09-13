@@ -174,6 +174,22 @@ Everything after the `---` closing line is the agent's **system prompt** and is
 passed to the subagent via `--append-system-prompt` (written to a temp file to
 avoid shell-escaping issues with multiline content).
 
+### USAGE.md (spawner contract, optional)
+
+An agent directory may also contain a `USAGE.md` file next to `AGENT.md`:
+
+```text
+<agents-dir>/
+└── my-worker/
+    ├── AGENT.md   # runner instructions (the worker's system prompt)
+    └── USAGE.md   # spawner instructions (for the parent agent)
+```
+
+`USAGE.md` is written **for the parent agent**, not the runner: recommended
+`timeoutMs`, what the task must contain, known gotchas. The runner never reads
+it. `pi-subagents-list` appends a `[+usage]` marker to agents that have one, so
+the parent knows to read `<source-dir>/<agent-id>/USAGE.md` before spawning.
+
 ### Where the agents directory is resolved
 
 Resolution order:
