@@ -1,7 +1,63 @@
 # AGENTS.md — pi-subagents
 
-AI collaborators working in this repo. Read this before editing. Short, Turkish
-mix is fine, but keep code comments and commit messages in English.
+AI collaborators working in this repo. Read this before editing. Everything in
+this repo — docs, tasks, and subagent communication — is in English. Keep code
+comments and commit messages in English.
+
+## 0. Cost model / delegation policy (read first)
+
+You (the agent reading this file) are an **expensive but smart model**. Prefer
+to offload work to **`minicpm-worker`** whenever possible.
+
+`minicpm-worker` is a **free, fast, local** subagent running a lightweight
+model. It is much cheaper than you, but also **less intelligent**: it follows
+clear, narrow instructions well and fails on vague, large, or
+reasoning-heavy tasks.
+
+Rules:
+
++ **Delegate by default.** Break every requested job into small, independent,
+  well-specified pieces and assign as many pieces as possible to
+  `minicpm-worker` via the `pi-subagents` tool
+  (`agent: "minicpm-worker"`, `task: "<English task>"`).
++ **Keep only what needs your brain.** Do architecture, planning, task
+  decomposition, ambiguous decisions, complex debugging, cross-file reasoning,
+  and final review/verification yourself. Delegate the mechanical execution.
++ **Always communicate with subagents in English**, even if the user wrote in
+  another language. Translate the subtask to English before sending it.
++ **One subtask = one goal.** Each delegated task must be self-contained:
+  what to do, which files/paths, what output format you expect, and how
+  success looks like. Never bundle several unrelated goals into one call.
++ **Verify, don't trust blindly.** `minicpm-worker` is dumber than you. Read
+  back its summary, check the diff/files it touched, run `npm run typecheck`,
+  and fix or re-delegate if the result is wrong or incomplete.
+
+Good delegation targets for `minicpm-worker`:
+
++ Reading a file or a folder and summarizing what it does.
++ Small, fully-specified edits (rename, formatting, boilerplate, comment
+  updates, mechanical refactors).
++ Writing repetitive tests, docs, or examples from a template you provide.
++ Single-step lookups ("find where X is defined", "list all callers of Y").
++ Reproducing an error with exact steps you give it.
+
+Keep for yourself:
+
++ Designing the change, splitting it into subtasks, defining interfaces.
++ Anything ambiguous, multi-step, or requiring trade-off judgments.
++ Final code review, merging subtask results, and running verification.
+
+How to write a good `minicpm-worker` task:
+
+```text
+agent: "minicpm-worker"
+task: "In <exact file/path>, do <exact change>. Context: <1-2 sentences>.
+Return: <what to report back, e.g. files changed + short summary>.
+Do not do anything else."
+```
+
+If a subtask comes back wrong, narrow its scope and re-delegate once with
+sharper instructions before giving up and doing it yourself.
 
 ## What this is
 
@@ -15,7 +71,7 @@ Entry point: `src/index.ts` (`"pi": { "extensions": ["./src/index.ts"] }`).
 
 ## Architecture (data flow)
 
-```
+```text
 pi calls tool "pi-subagents" (agent, task, ...)
   └─ execute(agent, task)        src/task.ts
        ├─ validate agent (guard)
@@ -60,15 +116,15 @@ reload.
 
 ## `thinkingLevel` (tool arg + agent frontmatter)
 
-+ Tool arg `thinkingLevel` agent frontmatter `thinkingLevel`'ı ezer.
-+ Frontmatter `thinkingLevel` pi'nin kendi default'unu ezer; ikisi de yoksa pi
-  eşzamanlı oturumun seviyesini korur (`--thinking`'a hiçbir şey gönderilmez).
-+ Değerler: `off | minimal | low | medium | high | xhigh | max` (pi'ye
-  `herdr agent start ... -- --thinking <level>` olarak iletilir).
++ The tool arg `thinkingLevel` overrides the agent frontmatter `thinkingLevel`.
++ The frontmatter `thinkingLevel` overrides pi's own default; if neither is set,
+  pi keeps the concurrent session's level (nothing is passed to `--thinking`).
++ Values: `off | minimal | low | medium | high | xhigh | max` (passed to pi as
+  `herdr agent start ... -- --thinking <level>`).
 
 ## Agent files (`AGENT.md`)
 
-```
+```yaml
 ---
 name: <id>
 description: <one line, shown in tool schema>
