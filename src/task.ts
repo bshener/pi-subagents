@@ -310,12 +310,20 @@ async function runTask(
     done ? "task completed" : "timed out"
   } • ${opts.closePaneOnDone ? (closed ? "pane closed" : "pane still open") : "pane open"}`;
 
+  // The close reason is always surfaced to the caller: when the worker finished
+  // normally that is "task completed"; when it did not reach a terminal state in
+  // time the pane was closed by the orchestrator due to a timeout. Never leave
+  // the parent guessing why the subagent disappeared.
+  const closeReason = done
+    ? "task completed"
+    : "timed out (worker did not reach a terminal state before the pane was closed)";
+
   const summaryBlock = workerOutput
     ? `\n\n--- Worker output ---\n${workerOutput}`
     : "";
   const text = done
     ? `${status}${summaryBlock}`
-    : `${status}\n\nNote: the worker did not reach a terminal state in time; its summary may be incomplete.${summaryBlock}`;
+    : `${status}\n\nClose reason: ${closeReason}\nThe worker may not have finished; its summary is possibly incomplete.${summaryBlock}`;
 
   return {
     content: [{ type: "text", text }],
@@ -326,6 +334,7 @@ async function runTask(
       agent: agentName,
       done,
       closed,
+      closeReason,
     },
   };
 }
