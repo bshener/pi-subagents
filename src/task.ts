@@ -144,10 +144,16 @@ async function runTask(
   // Generate a unique agent name (max 32 chars, must match [a-z][a-z0-9_-]*)
   const agentName = `subagent-${Date.now().toString(36)}`.slice(0, 32);
 
-  // 1) Open a new pane via split.
+  // 1) Open a new pane via split. Target the parent agent's pane explicitly so
+  //    the split happens in the parent's workspace/tab. Without a target herdr
+  //    splits the UI-focused pane, which may live in a different (currently
+  //    active) workspace. Outside Herdr (no HERDR_PANE_ID) fall back to the
+  //    old behavior and let herdr pick the focused pane.
+  const parentPaneId = process.env.HERDR_PANE_ID;
   const splitArgs = [
     "pane",
     "split",
+    ...(parentPaneId ? ["--pane", parentPaneId] : []),
     "--direction",
     opts.direction,
     "--cwd",
