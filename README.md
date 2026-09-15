@@ -15,6 +15,7 @@ report drafting, etc.) to a dedicated worker without leaving your main session.
 - Lifecycle managed through Herdr's `agent start` / `prompt` / `read` API.
 - Automatic pane open/close, focus control, split direction, and timeouts.
 - Transient-start retry with backoff (a cold local model gets time to boot).
+- No nested spawns: workers start with `--exclude-tools pi-subagents,pi-subagents-list`, so a subagent cannot launch its own subagents (pi has no single-extension exclude flag; denying just our tools keeps the worker's other extensions working).
 
 ## Requirements
 

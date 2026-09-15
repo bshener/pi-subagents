@@ -206,6 +206,13 @@ async function runTask(
   if (opts.noSkills) {
     piArgsAfterDashes.push("--no-skills");
   }
+  // A subagent must not spawn its own subagents (accidental recursion is
+  // expensive and never intended). pi has no single-extension exclude flag
+  // (--no-extensions would kill every extension the worker needs), so deny
+  // just our two tools instead; other extensions keep working. Slash commands
+  // (/subagent:...) stay registered but only a user can invoke those, not the
+  // model, so the nesting vector is closed.
+  piArgsAfterDashes.push("--exclude-tools", "pi-subagents,pi-subagents-list");
   for (const f of spFiles) {
     if (f.path) piArgsAfterDashes.push("--append-system-prompt", f.path);
   }
