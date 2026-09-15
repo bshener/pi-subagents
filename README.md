@@ -108,6 +108,7 @@ Agents are discovered at load time from `process.cwd()`, so add a new agent to
 | `cwd`             | no       | Working directory for the pane. Defaults to the current cwd.                     |
 | `direction`       | no       | Pane split: right/left/up/down. Default: right.                                  |
 | `focus`           | no       | Should the new pane take focus? Default: false.                                  |
+| `noSkills`        | no       | Disable skills discovery and loading in the subagent (passes --no-skills to pi). Default false. |
 | `closePaneOnDone` | no       | Close the pane when the task completes? Default: true.                           |
 | `timeoutMs`       | no       | Maximum wait time in ms. Default: 360000 (6 min).                                |
 
@@ -169,6 +170,7 @@ are fast but not deep. Use yourself for simple, quick tasks ...
 | `model`           | string  | Model used for this agent (`provider/id`).         |
 | `direction`       | string  | Pane split direction (`right`/`left`/`down`/`up`). |
 | `closePaneOnDone` | boolean | Close the pane on completion (`true`/`false`).     |
+| `noSkills`        | boolean | Disable skills discovery and loading in the subagent (passes --no-skills to pi). Default: false. |
 
 Everything after the `---` closing line is the agent's **system prompt** and is
 passed to the subagent via `--append-system-prompt` (written to a temp file to

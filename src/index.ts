@@ -93,6 +93,12 @@ export default function (pi: ExtensionAPI) {
             description: "Maximum wait time in ms. Default: 360000.",
           }),
         ),
+        noSkills: Type.Optional(
+          Type.Boolean({
+            description:
+              "Disable skills discovery and loading in the subagent (passes --no-skills to pi). Default: false (skills loaded).",
+          }),
+        ),
       },
       { required: ["agent", "task"] },
     ),
@@ -109,6 +115,7 @@ export default function (pi: ExtensionAPI) {
       const task = _params.task as string;
       return execute(agent, task, {
         thinkingLevel: _params.thinkingLevel as string | undefined,
+        noSkills: _params.noSkills as boolean | undefined,
       });
     },
   });

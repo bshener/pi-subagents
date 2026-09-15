@@ -46,7 +46,7 @@ function normalizeThinkingLevel(
 export async function execute(
   agent: string,
   task: string,
-  options: { thinkingLevel?: string } = {},
+  options: { thinkingLevel?: string; noSkills?: boolean } = {},
 ): Promise<AgentToolResult<unknown>> {
   // `agent` must be a non-empty string (the tool marks it optional, so a call
   // with no agent reaches here with agent === undefined). Reject it up front with
@@ -84,6 +84,14 @@ export async function execute(
   const thinkingLevel = normalizeThinkingLevel(
     options.thinkingLevel ?? meta.thinkingLevel,
   );
+  // Skills precedence: explicit tool argument beats the agent's frontmatter
+  // default. When neither is set, skills stay enabled (current behavior).
+  const rawNoSkills =
+    options.noSkills ??
+    (meta.noSkills === undefined
+      ? undefined
+      : meta.noSkills.toLowerCase() === "true");
+  const noSkills = rawNoSkills ?? false;
 
   // Build the system prompt files to pass to pi (--append-system-prompt).
   // The agent's system prompt is the markdown BODY of its md file (everything
@@ -102,6 +110,7 @@ export async function execute(
         cwd: process.cwd(),
         model,
         thinkingLevel,
+        noSkills,
         direction: "right",
         focus: false,
         closePaneOnDone: true,
@@ -133,6 +142,7 @@ async function runTask(
     cwd: string;
     model: string;
     thinkingLevel?: ThinkingLevel;
+    noSkills: boolean;
     direction: string;
     focus: boolean;
     closePaneOnDone: boolean;
@@ -192,6 +202,9 @@ async function runTask(
   const piArgsAfterDashes = ["--model", opts.model];
   if (opts.thinkingLevel) {
     piArgsAfterDashes.push("--thinking", opts.thinkingLevel);
+  }
+  if (opts.noSkills) {
+    piArgsAfterDashes.push("--no-skills");
   }
   for (const f of spFiles) {
     if (f.path) piArgsAfterDashes.push("--append-system-prompt", f.path);
@@ -312,7 +325,8 @@ async function runTask(
   }
 
   const tl = opts.thinkingLevel ? ` • thinking:${opts.thinkingLevel}` : "";
-  const status = `pi-subagents: pane ${paneId} • ${opts.model}${tl} • agent ${agentName} • ${
+  const ns = opts.noSkills ? " • no-skills" : "";
+  const status = `pi-subagents: pane ${paneId} • ${opts.model}${tl}${ns} • agent ${agentName} • ${
     done ? "task completed" : "timed out"
   } • ${opts.closePaneOnDone ? (closed ? "pane closed" : "pane still open") : "pane open"}`;
 
@@ -337,6 +351,7 @@ async function runTask(
       paneId,
       model: opts.model,
       thinkingLevel: opts.thinkingLevel,
+      noSkills: opts.noSkills,
       agent: agentName,
       done,
       closed,

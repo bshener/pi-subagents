@@ -5,6 +5,7 @@ model: llama-cpp/Tiel-Coder
 thinkingLevel: high
 direction: right
 closePaneOnDone: true
+noSkills: false
 ---
 
 # orchestrator

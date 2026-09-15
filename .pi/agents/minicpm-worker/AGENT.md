@@ -3,6 +3,7 @@ name: minicpm-worker
 description: Fast basic-task worker using the lightweight model. Use this for simple, quick tasks when you need the fastest possible results.
 model: llama-swap/MiniCPM
 thinkingLevel: high
+noSkills: false
 ---
 
 # minicpm-worker

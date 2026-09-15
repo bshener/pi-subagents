@@ -3,6 +3,7 @@ name: tiel-coder-worker
 description: Deep, high-quality worker using the smart (but slower) tiel-coder model. Use this when thoroughness, correctness, and strong reasoning matter more than speed.
 model: llama-swap/tiel-coder
 thinkingLevel: high
+noSkills: false
 ---
 
 # tiel-coder-worker
