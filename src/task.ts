@@ -11,8 +11,11 @@ import {
 import type { ThinkingLevel } from "./constants.ts";
 import { THINKING_LEVELS } from "./constants.ts";
 import { parseAgentManifest, resolveAgentFile } from "./agents.ts";
-import { AgentToolResult } from "@earendil-works/pi-coding-agent";
-import { SpFile } from "./types.ts";
+import type {
+  AgentToolResult,
+  AgentToolUpdateCallback,
+} from "@earendil-works/pi-coding-agent";
+import type { SpFile } from "./types.ts";
 import {
   parseHerdrErrorCode,
   parseHerdrResult,
@@ -55,11 +58,105 @@ function makeAgentName(agentId: string): string {
   return `${clean.slice(0, maxBase)}-${suffix}`.slice(0, 32);
 }
 
+/** Formats a millisecond duration as MM:SS (or H:MM:SS past one hour). */
+function formatRemaining(ms: number): string {
+  const totalSec = Math.max(0, Math.ceil(ms / 1000));
+  const h = Math.floor(totalSec / 3600);
+  const m = String(Math.floor((totalSec % 3600) / 60)).padStart(2, "0");
+  const s = String(totalSec % 60).padStart(2, "0");
+  return h > 0 ? `${h}:${m}:${s}` : `${m}:${s}`;
+}
+
+/** Starts the timeout countdown for a worker pane.
+ *
+ * Why a pane-label ticker: the worker pane runs its own pi TUI, and anything
+ * written into that terminal would land in the worker's input — so the only
+ * non-intrusive surface we own is the pane chrome. Every second
+ * the pane label becomes `<base> ⏳ MM:SS`, and the same value is pushed to the
+ * parent TUI via onUpdate/onStatus. All updates are best-effort and never fail
+ * the task. Returns a stop function that restores the base label and clears the
+ * parent status; the caller must await it in a finally block. */
+function startCountdown(opts: {
+  paneId: string;
+  baseLabel: string;
+  agentName: string;
+  deadline: number;
+  signal?: AbortSignal;
+  onUpdate?: AgentToolUpdateCallback<unknown>;
+  onStatus?: (text: string | undefined) => void;
+}): () => Promise<void> {
+  const tick = async (): Promise<void> => {
+    const remainingMs = Math.max(0, opts.deadline - Date.now());
+    const remaining = formatRemaining(remainingMs);
+    await runHerdr([
+      "pane",
+      "rename",
+      opts.paneId,
+      `${opts.baseLabel} ⏳ ${remaining}`,
+    ]).catch(() => undefined);
+    if (opts.signal?.aborted) return;
+    try {
+      opts.onStatus?.(`⏳ ${remaining} • ${opts.agentName}`);
+    } catch {
+      // Parent UI gone — pane label above is the source of truth.
+    }
+    try {
+      opts.onUpdate?.({
+        content: [
+          {
+            type: "text",
+            text: `⏳ ${remaining} remaining • agent ${opts.agentName} • pane ${opts.paneId}`,
+          },
+        ],
+        details: {
+          paneId: opts.paneId,
+          agent: opts.agentName,
+          remainingMs,
+        },
+      });
+    } catch {
+      // A throwing onUpdate must never break the wait.
+    }
+  };
+  void tick();
+  // Refresh cadence: 1s (~360 cheap local socket calls over the default
+  // 6-minute timeout). Rename failures are best-effort, never fatal.
+  const timer = setInterval(() => {
+    void tick();
+  }, 1_000);
+  return async (): Promise<void> => {
+    clearInterval(timer);
+    await runHerdr(["pane", "rename", opts.paneId, opts.baseLabel]).catch(
+      () => undefined,
+    );
+    try {
+      opts.onStatus?.(undefined);
+    } catch {
+      // Parent UI gone — nothing to clear.
+    }
+  };
+}
+
+/** Options accepted by execute(): tool params + live-update wiring. */
+export interface ExecuteOptions {
+  thinkingLevel?: string;
+  noSkills?: boolean;
+  timeoutMs?: number;
+  direction?: string;
+  focus?: boolean;
+  closePaneOnDone?: boolean;
+  cwd?: string;
+  model?: string;
+  signal?: AbortSignal;
+  onUpdate?: AgentToolUpdateCallback<unknown>;
+  onStatus?: (text: string | undefined) => void;
+}
+
 /** Returns a single agent's parsed model information. */
 export async function execute(
   agent: string,
   task: string,
-  options: { thinkingLevel?: string; noSkills?: boolean } = {},
+  options: ExecuteOptions = {},
 ): Promise<AgentToolResult<unknown>> {
   // `agent` must be a non-empty string (the tool marks it optional, so a call
   // with no agent reaches here with agent === undefined). Reject it up front with
@@ -89,7 +186,8 @@ export async function execute(
     return createAgentResult(`Error: Could not read agent file at ${file}`);
   }
   const { meta } = parseAgentManifest(content);
-  const model = meta.model ?? "default";
+  // Model precedence: explicit tool argument > agent frontmatter > "default".
+  const model = options.model ?? meta.model ?? "default";
   const systemPrompt = meta.systemPrompt ?? "";
   // Thinking level precedence: explicit tool argument beats the agent's
   // frontmatter default. When neither is set, pi keeps its own default (which
@@ -105,6 +203,27 @@ export async function execute(
       ? undefined
       : meta.noSkills.toLowerCase() === "true");
   const noSkills = rawNoSkills ?? false;
+  // Timeout: explicit tool argument wins; must be a finite positive number.
+  // The countdown ticker (see startCountdown) is driven by this same value,
+  // so a custom --timeoutMs is always reflected in the displayed counter.
+  const timeoutMs =
+    typeof options.timeoutMs === "number" &&
+    Number.isFinite(options.timeoutMs) &&
+    options.timeoutMs > 0
+      ? Math.floor(options.timeoutMs)
+      : DEFAULT_TIMEOUT_MS;
+  // Direction precedence: explicit tool argument > agent frontmatter > "right".
+  const DIRECTIONS = ["right", "left", "up", "down"] as const;
+  const rawDirection = options.direction ?? meta.direction ?? "right";
+  const direction = (DIRECTIONS as readonly string[]).includes(rawDirection)
+    ? rawDirection
+    : "right";
+  // closePaneOnDone precedence: explicit tool argument > agent frontmatter.
+  const closePaneOnDone =
+    options.closePaneOnDone ??
+    (meta.closePaneOnDone === undefined
+      ? true
+      : meta.closePaneOnDone.toLowerCase() !== "false");
 
   // Build the system prompt files to pass to pi (--append-system-prompt).
   // The agent's system prompt is the markdown BODY of its md file (everything
@@ -121,14 +240,17 @@ export async function execute(
     const res = await runTask(
       {
         agentId: agent,
-        cwd: process.cwd(),
+        cwd: options.cwd ?? process.cwd(),
         model,
         thinkingLevel,
         noSkills,
-        direction: "right",
-        focus: false,
-        closePaneOnDone: true,
-        timeoutMs: DEFAULT_TIMEOUT_MS,
+        direction,
+        focus: options.focus ?? false,
+        closePaneOnDone,
+        timeoutMs,
+        signal: options.signal,
+        onUpdate: options.onUpdate,
+        onStatus: options.onStatus,
       },
       spFiles,
       task,
@@ -162,6 +284,9 @@ async function runTask(
     focus: boolean;
     closePaneOnDone: boolean;
     timeoutMs: number;
+    signal?: AbortSignal;
+    onUpdate?: AgentToolUpdateCallback<unknown>;
+    onStatus?: (text: string | undefined) => void;
   },
   spFiles: SpFile[],
   task: string,
@@ -299,20 +424,41 @@ async function runTask(
     "--timeout",
     String(opts.timeoutMs),
   ];
-  const { code: promptCode } = await runHerdr(promptArgs);
-
-  // Explicitly confirm the terminal state (prompt --wait can be lenient on
-  // timeouts) before reading the summary.
-  const terminalStates = new Set(["idle", "done", "blocked"]);
+  // One deadline bounds the whole wait (prompt --wait + the terminal-state
+  // poll below), and the same deadline drives the countdown ticker — so the
+  // displayed counter always matches the actual remaining wait. Previously the
+  // poll recomputed a fresh deadline after the prompt, allowing up to 2x the
+  // configured timeout.
   const deadline = Date.now() + opts.timeoutMs;
+  const stopCountdown = startCountdown({
+    paneId,
+    baseLabel: agentName,
+    agentName,
+    deadline,
+    signal: opts.signal,
+    onUpdate: opts.onUpdate,
+    onStatus: opts.onStatus,
+  });
+  let promptCode = 1;
   let agentStatus = "working";
-  for (;;) {
-    if (Date.now() >= deadline) break;
-    const g = await runHerdr(["agent", "get", agentName]);
-    const m = /"agent_status"\s*:\s*"(\w+)"/.exec(g.stdout || "");
-    agentStatus = m ? m[1] : agentStatus;
-    if (terminalStates.has(agentStatus)) break;
-    await sleep(1000);
+  const terminalStates = new Set(["idle", "done", "blocked"]);
+  try {
+    ({ code: promptCode } = await runHerdr(promptArgs));
+
+    // Explicitly confirm the terminal state (prompt --wait can be lenient on
+    // timeouts) before reading the summary. Uses the remaining time only.
+    for (;;) {
+      if (Date.now() >= deadline) break;
+      const g = await runHerdr(["agent", "get", agentName]);
+      const m = /"agent_status"\s*:\s*"(\w+)"/.exec(g.stdout || "");
+      agentStatus = m ? m[1] : agentStatus;
+      if (terminalStates.has(agentStatus)) break;
+      await sleep(1000);
+    }
+  } finally {
+    // Always restore the pane label and clear the parent status, even when the
+    // wait throws — a stale "⏳ 00:00" label must never outlive the task.
+    await stopCountdown();
   }
   const done = promptCode === 0 || terminalStates.has(agentStatus);
 

@@ -113,9 +113,28 @@ export default function (pi: ExtensionAPI) {
     ) => {
       const agent = _params.agent as string;
       const task = _params.task as string;
+      // A per-tool-call status key so concurrent subagents don't overwrite
+      // each other's footer countdown.
+      const statusKey = `pi-subagents:${_toolCallId}`;
       return execute(agent, task, {
         thinkingLevel: _params.thinkingLevel as string | undefined,
         noSkills: _params.noSkills as boolean | undefined,
+        timeoutMs: _params.timeoutMs as number | undefined,
+        direction: _params.direction as string | undefined,
+        focus: _params.focus as boolean | undefined,
+        closePaneOnDone: _params.closePaneOnDone as boolean | undefined,
+        cwd: _params.cwd as string | undefined,
+        model: _params.model as string | undefined,
+        signal: _signal,
+        onUpdate: _onUpdate,
+        onStatus: (text) => {
+          try {
+            _ctx.ui.setStatus(statusKey, text);
+          } catch {
+            // No status-capable UI (e.g. print/RPC mode) — the worker pane
+            // label still shows the countdown.
+          }
+        },
       });
     },
   });

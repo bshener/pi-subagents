@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { spawn } from "node:child_process";
-import { SpFile } from "./types.ts";
+import type { SpFile } from "./types.ts";
 import { HERDR_BIN } from "./constants.ts";
 
 /** Extracts the `error.code` string from a herdr JSON error payload, if any. */
