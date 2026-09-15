@@ -42,6 +42,19 @@ function normalizeThinkingLevel(
     : undefined;
 }
 
+/** Builds a unique Herdr agent name from the subagent id.
+ * Format: "<agentId>-<timestamp36>-<rand4>", truncated to 32 chars to satisfy
+ * Herdr's `[a-z][a-z0-9_-]{0,31}` rule. Timestamp + random suffix prevents
+ * collisions when several subagents spawn within the same millisecond. */
+function makeAgentName(agentId: string): string {
+  const raw = agentId.toLowerCase().replace(/[^a-z0-9_-]/g, "-");
+  const clean = raw.replace(/^[^a-z]+/, "a") || "subagent";
+  const rand = Math.random().toString(36).slice(2, 6).padEnd(4, "0");
+  const suffix = `${Date.now().toString(36)}-${rand}`;
+  const maxBase = Math.max(1, 32 - suffix.length - 1);
+  return `${clean.slice(0, maxBase)}-${suffix}`.slice(0, 32);
+}
+
 /** Returns a single agent's parsed model information. */
 export async function execute(
   agent: string,
@@ -107,6 +120,7 @@ export async function execute(
   try {
     const res = await runTask(
       {
+        agentId: agent,
         cwd: process.cwd(),
         model,
         thinkingLevel,
@@ -139,6 +153,7 @@ export async function execute(
 /** Loads an agent and runs the specified task in a subagent process. */
 async function runTask(
   opts: {
+    agentId: string;
     cwd: string;
     model: string;
     thinkingLevel?: ThinkingLevel;
@@ -151,8 +166,9 @@ async function runTask(
   spFiles: SpFile[],
   task: string,
 ): Promise<AgentToolResult<unknown>> {
-  // Generate a unique agent name (max 32 chars, must match [a-z][a-z0-9_-]*)
-  const agentName = `subagent-${Date.now().toString(36)}`.slice(0, 32);
+  // Unique agent name (max 32 chars, must match [a-z][a-z0-9_-]*).
+  // See makeAgentName: "<agentId>-<timestamp36>-<rand4>".
+  const agentName = makeAgentName(opts.agentId);
 
   // 1) Open a new pane via split. Target the parent agent's pane explicitly so
   //    the split happens in the parent's workspace/tab. Without a target herdr
@@ -195,6 +211,12 @@ async function runTask(
       details: {},
     };
   }
+
+  // Label the pane with the agent name so it is identifiable in the Herdr UI.
+  // Pane labels live in a different (display-only) namespace than agent names,
+  // so this can never collide with `agent start`. Best-effort on purpose: a
+  // rename failure must never fail the task.
+  await runHerdr(["pane", "rename", paneId, agentName]).catch(() => undefined);
 
   // 2) Start a named pi agent in the pane using Herdr's agent start command.
   //    --kind pi selects the canonical pi executable; -- passes remaining args
