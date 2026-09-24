@@ -15,7 +15,7 @@ report drafting, etc.) to a dedicated worker without leaving your main session.
 - Lifecycle managed through Herdr's `agent start` / `prompt` / `read` API.
 - Automatic pane open/close, focus control, split direction, and timeouts.
 - Transient-start retry with backoff (a cold local model gets time to boot).
-- No nested spawns: workers start with `--exclude-tools pi-subagents,pi-subagents-list`, so a subagent cannot launch its own subagents (pi has no single-extension exclude flag; denying just our tools keeps the worker's other extensions working).
+- No nested spawns by default: workers start with `--exclude-tools pi-subagents,pi-subagents-list`, so a subagent cannot launch its own subagents (pi has no single-extension exclude flag; denying just our tools keeps the worker's other extensions working). Opt in per agent or per call with `nestedSubagentAllowed: true`.
 
 ## Requirements
 
@@ -110,6 +110,7 @@ Agents are discovered at load time from `process.cwd()`, so add a new agent to
 | `direction`       | no       | Pane split: right/left/up/down. Default: right.                                  |
 | `focus`           | no       | Should the new pane take focus? Default: false.                                  |
 | `noSkills`        | no       | Disable skills discovery and loading in the subagent (passes --no-skills to pi). Default false. |
+| `nestedSubagentAllowed` | no | Allow the subagent to spawn its own subagents (keeps pi-subagents tools enabled in the worker). Default: false. |
 | `closePaneOnDone` | no       | Close the pane when the task completes? Default: true.                           |
 | `timeoutMs`       | no       | Maximum wait time in ms. Default: 360000 (6 min).                                |
 
@@ -172,6 +173,7 @@ are fast but not deep. Use yourself for simple, quick tasks ...
 | `direction`       | string  | Pane split direction (`right`/`left`/`down`/`up`). |
 | `closePaneOnDone` | boolean | Close the pane on completion (`true`/`false`).     |
 | `noSkills`        | boolean | Disable skills discovery and loading in the subagent (passes --no-skills to pi). Default: false. |
+| `nestedSubagentAllowed` | boolean | Allow the subagent to spawn its own subagents (keeps pi-subagents tools enabled in the worker). Default: false. |
 
 Everything after the `---` closing line is the agent's **system prompt** and is
 passed to the subagent via `--append-system-prompt` (written to a temp file to

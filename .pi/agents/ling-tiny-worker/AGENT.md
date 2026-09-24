@@ -4,6 +4,7 @@ description: Fast basic-task worker using the lightweight model. Use this for si
 model: llama-swap/Ling-Tiny
 thinkingLevel: high
 noSkills: false
+nestedSubagentAllowed: false
 ---
 
 # ling-tiny-worker

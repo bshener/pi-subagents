@@ -132,6 +132,7 @@ model: <model id, or omit for "default">
 thinkingLevel: off          # optional, per-agent default: off|minimal|low|medium|high|xhigh|max
 direction: right            # optional, per-agent default split
 closePaneOnDone: true       # optional
+nestedSubagentAllowed: false # optional, allow the worker to spawn its own subagents
 ---
 # markdown body = the agent's system prompt
 ```

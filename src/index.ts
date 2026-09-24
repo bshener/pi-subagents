@@ -99,6 +99,12 @@ export default function (pi: ExtensionAPI) {
               "Disable skills discovery and loading in the subagent (passes --no-skills to pi). Default: false (skills loaded).",
           }),
         ),
+        nestedSubagentAllowed: Type.Optional(
+          Type.Boolean({
+            description:
+              "Allow the subagent to spawn its own subagents (keeps pi-subagents tools enabled in the worker). Default: false.",
+          }),
+        ),
       },
       { required: ["agent", "task"] },
     ),
@@ -119,6 +125,7 @@ export default function (pi: ExtensionAPI) {
       return execute(agent, task, {
         thinkingLevel: _params.thinkingLevel as string | undefined,
         noSkills: _params.noSkills as boolean | undefined,
+        nestedSubagentAllowed: _params.nestedSubagentAllowed as boolean | undefined,
         timeoutMs: _params.timeoutMs as number | undefined,
         direction: _params.direction as string | undefined,
         focus: _params.focus as boolean | undefined,

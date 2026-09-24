@@ -6,6 +6,7 @@ thinkingLevel: high
 direction: right
 closePaneOnDone: true
 noSkills: false
+nestedSubagentAllowed: false
 ---
 
 # orchestrator

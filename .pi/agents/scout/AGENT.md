@@ -4,6 +4,7 @@ description: Fast codebase scout using the lightweight MiniCPM model. Explores r
 model: llama-swap/MiniCPM
 thinkingLevel: high
 noSkills: true
+nestedSubagentAllowed: false
 ---
 
 # scout

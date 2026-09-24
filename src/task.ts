@@ -141,6 +141,7 @@ function startCountdown(opts: {
 export interface ExecuteOptions {
   thinkingLevel?: string;
   noSkills?: boolean;
+  nestedSubagentAllowed?: boolean;
   timeoutMs?: number;
   direction?: string;
   focus?: boolean;
@@ -203,6 +204,14 @@ export async function execute(
       ? undefined
       : meta.noSkills.toLowerCase() === "true");
   const noSkills = rawNoSkills ?? false;
+  // Nesting precedence: explicit tool argument beats the agent's frontmatter
+  // default. When neither is set, nesting stays disabled (current behavior).
+  const rawNestedSubagentAllowed =
+    options.nestedSubagentAllowed ??
+    (meta.nestedSubagentAllowed === undefined
+      ? undefined
+      : meta.nestedSubagentAllowed.toLowerCase() === "true");
+  const nestedSubagentAllowed = rawNestedSubagentAllowed ?? false;
   // Timeout: explicit tool argument wins; must be a finite positive number.
   // The countdown ticker (see startCountdown) is driven by this same value,
   // so a custom --timeoutMs is always reflected in the displayed counter.
@@ -244,6 +253,7 @@ export async function execute(
         model,
         thinkingLevel,
         noSkills,
+        nestedSubagentAllowed,
         direction,
         focus: options.focus ?? false,
         closePaneOnDone,
@@ -280,6 +290,7 @@ async function runTask(
     model: string;
     thinkingLevel?: ThinkingLevel;
     noSkills: boolean;
+    nestedSubagentAllowed: boolean;
     direction: string;
     focus: boolean;
     closePaneOnDone: boolean;
@@ -353,13 +364,16 @@ async function runTask(
   if (opts.noSkills) {
     piArgsAfterDashes.push("--no-skills");
   }
-  // A subagent must not spawn its own subagents (accidental recursion is
+  // A subagent must not spawn its own subagents unless the agent opts in
+  // via nestedSubagentAllowed (default false: accidental recursion is
   // expensive and never intended). pi has no single-extension exclude flag
   // (--no-extensions would kill every extension the worker needs), so deny
   // just our two tools instead; other extensions keep working. Slash commands
   // (/subagent:...) stay registered but only a user can invoke those, not the
-  // model, so the nesting vector is closed.
-  piArgsAfterDashes.push("--exclude-tools", "pi-subagents,pi-subagents-list");
+  // model, so the nesting vector is closed when this is false.
+  if (!opts.nestedSubagentAllowed) {
+    piArgsAfterDashes.push("--exclude-tools", "pi-subagents,pi-subagents-list");
+  }
   for (const f of spFiles) {
     if (f.path) piArgsAfterDashes.push("--append-system-prompt", f.path);
   }
@@ -501,7 +515,8 @@ async function runTask(
 
   const tl = opts.thinkingLevel ? ` • thinking:${opts.thinkingLevel}` : "";
   const ns = opts.noSkills ? " • no-skills" : "";
-  const status = `pi-subagents: pane ${paneId} • ${opts.model}${tl}${ns} • agent ${agentName} • ${
+  const nest = opts.nestedSubagentAllowed ? " • nested" : "";
+  const status = `pi-subagents: pane ${paneId} • ${opts.model}${tl}${ns}${nest} • agent ${agentName} • ${
     done ? "task completed" : "timed out"
   } • ${opts.closePaneOnDone ? (closed ? "pane closed" : "pane still open") : "pane open"}`;
 
@@ -527,6 +542,7 @@ async function runTask(
       model: opts.model,
       thinkingLevel: opts.thinkingLevel,
       noSkills: opts.noSkills,
+      nestedSubagentAllowed: opts.nestedSubagentAllowed,
       agent: agentName,
       done,
       closed,

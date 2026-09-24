@@ -4,6 +4,7 @@ description: Deep, high-quality worker using the smart (but slower) tiel-coder m
 model: llama-swap/tiel-coder
 thinkingLevel: high
 noSkills: false
+nestedSubagentAllowed: false
 ---
 
 # tiel-coder-worker
