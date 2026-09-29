@@ -1,5 +1,16 @@
 export const HERDR_BIN = process.env.HERDR_BIN ?? "herdr";
-export const DEFAULT_TIMEOUT_MS = 360_000; // 3 minutes
+// Workers notify the parent when their task completes, so the timeout is only
+// a safety net against stuck/lost workers — not a performance target. Floor and
+// default are deliberately generous (30 minutes).
+export const MIN_TIMEOUT_MS = 30 * 60 * 1_000; // 30 minutes
+export const DEFAULT_TIMEOUT_MS = MIN_TIMEOUT_MS; // 30 minutes
+// Stale watchdog: while supervising a worker, `agent get` is polled every
+// WAIT_POLL_MS. A poll counts as suspicious when the lookup fails, reports no
+// status, or reports "unknown". STALE_STREAK_THRESHOLD consecutive suspicious
+// polls means the worker is gone/stuck: its pane is closed (killed) and the
+// tool reports what happened instead of waiting out the full timeout.
+export const WAIT_POLL_MS = 1_000;
+export const STALE_STREAK_THRESHOLD = 5;
 export const AGENT_FILENAME = "AGENT.md";
 // Optional spawner contract: "<agent-dir>/USAGE.md" holds instructions for the
 // *parent* agent (how to spawn this agent: timeouts, task contents, gotchas).

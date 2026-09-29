@@ -6,6 +6,19 @@ import { agentsBySourceTextForCwd, listAgentsBySource } from "./list.ts";
 import { renderCall, renderResult } from "./render.ts";
 import { formatDoctorReport, runDoctor } from "./doctor.ts";
 import { discoverAgentsSync, resolveAgentsDir } from "./agents.ts";
+import {
+  activeClear,
+  activeRemove,
+  activeSnapshot,
+  activeUpsert,
+  createActiveBoxComponent,
+  renderActiveBox,
+} from "./active.ts";
+import type { ActiveTick } from "./task.ts";
+
+/** Widget key for the parent-TUI active-subagents list (below the editor,
+ * near the footer). Undefined content hides the widget. */
+const ACTIVE_WIDGET_KEY = "pi-subagents-active";
 import type {
   ExtensionAPI,
   MessageRenderOptions,
@@ -90,7 +103,10 @@ export default function (pi: ExtensionAPI) {
         ),
         timeoutMs: Type.Optional(
           Type.Number({
-            description: "Maximum wait time in ms. Default: 360000.",
+            description:
+              "Maximum wait time in ms. Minimum 1800000 (30 minutes) — smaller values " +
+              "are raised to the minimum. Workers notify the parent when done, so this " +
+              "is only a safety net against stuck workers. Default: 1800000.",
           }),
         ),
         noSkills: Type.Optional(
@@ -122,27 +138,121 @@ export default function (pi: ExtensionAPI) {
       // A per-tool-call status key so concurrent subagents don't overwrite
       // each other's footer countdown.
       const statusKey = `pi-subagents:${_toolCallId}`;
-      return execute(agent, task, {
-        thinkingLevel: _params.thinkingLevel as string | undefined,
-        noSkills: _params.noSkills as boolean | undefined,
-        nestedSubagentAllowed: _params.nestedSubagentAllowed as boolean | undefined,
-        timeoutMs: _params.timeoutMs as number | undefined,
-        direction: _params.direction as string | undefined,
-        focus: _params.focus as boolean | undefined,
-        closePaneOnDone: _params.closePaneOnDone as boolean | undefined,
-        cwd: _params.cwd as string | undefined,
-        model: _params.model as string | undefined,
-        signal: _signal,
-        onUpdate: _onUpdate,
-        onStatus: (text) => {
-          try {
-            _ctx.ui.setStatus(statusKey, text);
-          } catch {
-            // No status-capable UI (e.g. print/RPC mode) — the worker pane
-            // label still shows the countdown.
+      // Persistent in-TUI list of the subagents THIS session called. Widget
+      // updates are best-effort and skipped entirely without a UI (print/JSON
+      // modes) — the Herdr pane label remains the source of truth there.
+      const canShow = _ctx.hasUI === true;
+      // Skip pushing an identical snapshot twice. Re-setting the widget tears
+      // down and rebuilds its component — doing that with unchanged content
+      // (countdown tick + supervise poll fire in different phases) makes the
+      // box visibly flicker at the bottom of the screen.
+      let lastWidgetSig: string | undefined;
+      const refreshWidget = (): void => {
+        if (!canShow) return;
+        try {
+          const snap = activeSnapshot();
+          const sig = snap ? `${snap.title}\n${snap.rows.join("\n")}` : "";
+          if (sig === lastWidgetSig) return;
+          lastWidgetSig = sig;
+          if (_ctx.mode === "tui") {
+            // Full-width responsive box: the factory measures the real
+            // widget width on every render, so resizes just work.
+            if (snap === undefined) {
+              _ctx.ui.setWidget(ACTIVE_WIDGET_KEY, undefined);
+            } else {
+              _ctx.ui.setWidget(
+                ACTIVE_WIDGET_KEY,
+                (_tui, theme) =>
+                  createActiveBoxComponent(snap.title, snap.rows, (text) =>
+                    theme.fg("accent", text),
+                  ),
+                { placement: "belowEditor" },
+              );
+            }
+          } else {
+            // RPC and friends cannot render custom components — fall back
+            // to the fixed-width boxed lines.
+            _ctx.ui.setWidget(ACTIVE_WIDGET_KEY, renderActiveBox(), {
+              placement: "belowEditor",
+            });
           }
-        },
+        } catch {
+          // Widget unsupported here — footer status above still applies.
+        }
+      };
+      const rawTimeout = _params.timeoutMs as number | undefined;
+      activeUpsert(_toolCallId, {
+        agentId: agent,
+        timeoutMs:
+          typeof rawTimeout === "number" && Number.isFinite(rawTimeout)
+            ? Math.floor(rawTimeout)
+            : undefined,
+        phase: "starting",
       });
+      refreshWidget();
+      try {
+        return await execute(agent, task, {
+          thinkingLevel: _params.thinkingLevel as string | undefined,
+          noSkills: _params.noSkills as boolean | undefined,
+          nestedSubagentAllowed: _params.nestedSubagentAllowed as boolean | undefined,
+          timeoutMs: _params.timeoutMs as number | undefined,
+          direction: _params.direction as string | undefined,
+          focus: _params.focus as boolean | undefined,
+          closePaneOnDone: _params.closePaneOnDone as boolean | undefined,
+          cwd: _params.cwd as string | undefined,
+          model: _params.model as string | undefined,
+          signal: _signal,
+          onUpdate: (update) => {
+            // Mirror countdown progress into the widget row, then forward.
+            try {
+              const details = (update as { details?: Record<string, unknown> })
+                ?.details;
+              if (details) {
+                activeUpsert(_toolCallId, {
+                  agentId: agent,
+                  agentName: details["agent"] as string | undefined,
+                  paneId: details["paneId"] as string | undefined,
+                  remainingMs: details["remainingMs"] as number | undefined,
+                  timeoutMs: details["timeoutMs"] as number | undefined,
+                  phase: "working",
+                });
+                refreshWidget();
+              }
+            } catch {
+              // Registry refresh must never break the tool result.
+            }
+            return _onUpdate?.(update);
+          },
+          onStatus: (text) => {
+            try {
+              _ctx.ui.setStatus(statusKey, text);
+            } catch {
+              // No status-capable UI (e.g. print/RPC mode) — the worker pane
+              // label still shows the countdown.
+            }
+          },
+          onActive: (tick: ActiveTick) => {
+            activeUpsert(_toolCallId, {
+              agentId: tick.agentId,
+              agentName: tick.agentName,
+              paneId: tick.paneId,
+              remainingMs: tick.remainingMs,
+              timeoutMs: tick.timeoutMs,
+              phase: tick.phase,
+              status: tick.status,
+            });
+            refreshWidget();
+          },
+        });
+      } finally {
+        activeRemove(_toolCallId);
+        refreshWidget();
+        try {
+          _ctx.ui.setStatus(statusKey, undefined);
+        } catch {
+          // UI already gone — nothing to clear.
+        }
+      }
     },
   });
 
@@ -164,6 +274,18 @@ export default function (pi: ExtensionAPI) {
     ) => {
       return createAgentResult(await listAgentsBySource());
     },
+  });
+
+  // Never leave a stale active-subagents widget behind on quit, reload, or
+  // session replacement. The registry is process-scoped, so a shutdown must
+  // clear both it and the widget.
+  pi.on("session_shutdown", (_event, ctx) => {
+    activeClear();
+    try {
+      ctx.ui.setWidget(ACTIVE_WIDGET_KEY, undefined);
+    } catch {
+      // UI already gone — nothing to clear.
+    }
   });
 
   // Register the message renderer for the pi-subagents-list command.

@@ -112,7 +112,7 @@ Agents are discovered at load time from `process.cwd()`, so add a new agent to
 | `noSkills`        | no       | Disable skills discovery and loading in the subagent (passes --no-skills to pi). Default false. |
 | `nestedSubagentAllowed` | no | Allow the subagent to spawn its own subagents (keeps pi-subagents tools enabled in the worker). Default: false. |
 | `closePaneOnDone` | no       | Close the pane when the task completes? Default: true.                           |
-| `timeoutMs`       | no       | Maximum wait time in ms. Default: 360000 (6 min).                                |
+| `timeoutMs`       | no       | Maximum wait time in ms. Minimum 1800000 (30 min); smaller values are raised. Default: 1800000. |
 
 Model precedence: `--model` flag > agent file > current model. If neither an
 explicit `--model` nor an agent that declares a model is provided, the tool

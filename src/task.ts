@@ -4,6 +4,9 @@ import {
   TRANSIENT_START_ERRORS,
   MAX_START_ATTEMPTS,
   DEFAULT_TIMEOUT_MS,
+  MIN_TIMEOUT_MS,
+  WAIT_POLL_MS,
+  STALE_STREAK_THRESHOLD,
   CLOSE_RETRY_MS,
   WORKER_OUTPUT_LINES,
   START_BACKOFF_MS,
@@ -79,24 +82,40 @@ function formatRemaining(ms: number): string {
 function startCountdown(opts: {
   paneId: string;
   baseLabel: string;
+  agentId: string;
   agentName: string;
   deadline: number;
+  timeoutMs: number;
   signal?: AbortSignal;
   onUpdate?: AgentToolUpdateCallback<unknown>;
   onStatus?: (text: string | undefined) => void;
+  onActive?: (tick: ActiveTick) => void;
 }): () => Promise<void> {
+  const total = formatRemaining(opts.timeoutMs);
+  // Overlap guard: setInterval fires every second but a tick is async (pane
+  // rename + callbacks). Without this, a slow tick overlaps the next one and
+  // the two finish out of order — the displayed countdown visibly fluctuates
+  // instead of decreasing monotonically. `stopped` additionally prevents a
+  // late tick from repainting UI after stop() cleared it.
+  let inFlight = false;
+  let stopped = false;
   const tick = async (): Promise<void> => {
-    const remainingMs = Math.max(0, opts.deadline - Date.now());
-    const remaining = formatRemaining(remainingMs);
-    await runHerdr([
-      "pane",
-      "rename",
-      opts.paneId,
-      `${opts.baseLabel} ⏳ ${remaining}`,
-    ]).catch(() => undefined);
-    if (opts.signal?.aborted) return;
+    if (stopped || inFlight) return;
+    inFlight = true;
     try {
-      opts.onStatus?.(`⏳ ${remaining} • ${opts.agentName}`);
+      const remainingMs = Math.max(0, opts.deadline - Date.now());
+      const remaining = formatRemaining(remainingMs);
+      await runHerdr([
+        "pane",
+        "rename",
+        opts.paneId,
+        `${opts.baseLabel} ⏳ ${remaining}`,
+      ]).catch(() => undefined);
+      if (stopped || opts.signal?.aborted) return;
+    try {
+      opts.onStatus?.(
+        `\u{1F916} ${opts.agentId} \u23F3 ${remaining}/${total} • ${opts.agentName}`,
+      );
     } catch {
       // Parent UI gone — pane label above is the source of truth.
     }
@@ -105,27 +124,49 @@ function startCountdown(opts: {
         content: [
           {
             type: "text",
-            text: `⏳ ${remaining} remaining • agent ${opts.agentName} • pane ${opts.paneId}`,
+            text: `\u{1F916} ${opts.agentId} \u23F3 ${remaining}/${total} remaining • agent ${opts.agentName} • pane ${opts.paneId}`,
           },
         ],
         details: {
           paneId: opts.paneId,
+          agentId: opts.agentId,
           agent: opts.agentName,
           remainingMs,
+          timeoutMs: opts.timeoutMs,
         },
       });
     } catch {
       // A throwing onUpdate must never break the wait.
     }
+      try {
+        opts.onActive?.({
+          agentId: opts.agentId,
+          agentName: opts.agentName,
+          paneId: opts.paneId,
+          remainingMs,
+          timeoutMs: opts.timeoutMs,
+          phase: "working",
+        });
+      } catch {
+        // Parent UI gone — same policy as onStatus/onUpdate above.
+      }
+    } finally {
+      inFlight = false;
+    }
   };
   void tick();
-  // Refresh cadence: 1s (~360 cheap local socket calls over the default
-  // 6-minute timeout). Rename failures are best-effort, never fatal.
+  // Refresh cadence: 1s (cheap local socket calls; the pane label is the
+  // fallback surface when the parent has no TUI). Rename failures are
+  // best-effort, never fatal.
   const timer = setInterval(() => {
     void tick();
   }, 1_000);
   return async (): Promise<void> => {
+    stopped = true;
     clearInterval(timer);
+    // Let an in-flight tick finish first: its pane rename would otherwise
+    // land after the label restore below and leave a stale "⏳" behind.
+    for (let i = 0; i < 20 && inFlight; i++) await sleep(50);
     await runHerdr(["pane", "rename", opts.paneId, opts.baseLabel]).catch(
       () => undefined,
     );
@@ -135,6 +176,22 @@ function startCountdown(opts: {
       // Parent UI gone — nothing to clear.
     }
   };
+}
+
+/** Progress snapshot for the parent-TUI active-subagents list.
+ * Emitted best-effort at key lifecycle points (start, pane split, agent
+ * start, every countdown tick). Never fails the task. */
+export interface ActiveTick {
+  agentId: string;
+  agentName: string;
+  paneId?: string;
+  remainingMs?: number;
+  timeoutMs?: number;
+  phase: "starting" | "working";
+  /** Live `agent_status` from Herdr (`working`, `idle`, `blocked`, `done`,
+   * `unknown`) or a synthetic watchdog state (`stale — killed`). Absent until
+   * the supervise loop observes the worker. */
+  status?: string;
 }
 
 /** Options accepted by execute(): tool params + live-update wiring. */
@@ -151,6 +208,7 @@ export interface ExecuteOptions {
   signal?: AbortSignal;
   onUpdate?: AgentToolUpdateCallback<unknown>;
   onStatus?: (text: string | undefined) => void;
+  onActive?: (tick: ActiveTick) => void;
 }
 
 /** Returns a single agent's parsed model information. */
@@ -213,14 +271,17 @@ export async function execute(
       : meta.nestedSubagentAllowed.toLowerCase() === "true");
   const nestedSubagentAllowed = rawNestedSubagentAllowed ?? false;
   // Timeout: explicit tool argument wins; must be a finite positive number.
-  // The countdown ticker (see startCountdown) is driven by this same value,
-  // so a custom --timeoutMs is always reflected in the displayed counter.
-  const timeoutMs =
+  // Floored at MIN_TIMEOUT_MS (30 min): workers notify the parent when done,
+  // so the timeout is only a safety net against stuck/lost workers. The
+  // countdown ticker (see startCountdown) is driven by this same value, so a
+  // custom --timeoutMs is always reflected in the displayed counter.
+  const requestedMs =
     typeof options.timeoutMs === "number" &&
     Number.isFinite(options.timeoutMs) &&
     options.timeoutMs > 0
       ? Math.floor(options.timeoutMs)
       : DEFAULT_TIMEOUT_MS;
+  const timeoutMs = Math.max(MIN_TIMEOUT_MS, requestedMs);
   // Direction precedence: explicit tool argument > agent frontmatter > "right".
   const DIRECTIONS = ["right", "left", "up", "down"] as const;
   const rawDirection = options.direction ?? meta.direction ?? "right";
@@ -261,6 +322,7 @@ export async function execute(
         signal: options.signal,
         onUpdate: options.onUpdate,
         onStatus: options.onStatus,
+        onActive: options.onActive,
       },
       spFiles,
       task,
@@ -298,6 +360,7 @@ async function runTask(
     signal?: AbortSignal;
     onUpdate?: AgentToolUpdateCallback<unknown>;
     onStatus?: (text: string | undefined) => void;
+    onActive?: (tick: ActiveTick) => void;
   },
   spFiles: SpFile[],
   task: string,
@@ -305,6 +368,21 @@ async function runTask(
   // Unique agent name (max 32 chars, must match [a-z][a-z0-9_-]*).
   // See makeAgentName: "<agentId>-<timestamp36>-<rand4>".
   const agentName = makeAgentName(opts.agentId);
+  // Best-effort progress for the parent-TUI active-subagents list. Emits are
+  // wrapped so a throwing callback can never fail the task.
+  const emitActive = (tick: ActiveTick): void => {
+    try {
+      opts.onActive?.(tick);
+    } catch {
+      // Parent UI gone — the Herdr pane label is the source of truth.
+    }
+  };
+  emitActive({
+    agentId: opts.agentId,
+    agentName,
+    timeoutMs: opts.timeoutMs,
+    phase: "starting",
+  });
 
   // 1) Open a new pane via split. Target the parent agent's pane explicitly so
   //    the split happens in the parent's workspace/tab. Without a target herdr
@@ -347,6 +425,14 @@ async function runTask(
       details: {},
     };
   }
+
+  emitActive({
+    agentId: opts.agentId,
+    agentName,
+    paneId,
+    timeoutMs: opts.timeoutMs,
+    phase: "starting",
+  });
 
   // Label the pane with the agent name so it is identifiable in the Herdr UI.
   // Pane labels live in a different (display-only) namespace than agent names,
@@ -420,6 +506,14 @@ async function runTask(
     };
   }
 
+  emitActive({
+    agentId: opts.agentId,
+    agentName,
+    paneId,
+    timeoutMs: opts.timeoutMs,
+    phase: "working",
+  });
+
   // 3) Submit the task and block until the worker reaches a terminal state.
   //    The worker sends its concise summary DIRECTLY to the orchestrator's pane
   //    (per the worker's AGENT.md rule) via `herdr agent prompt '<PARENT_PANE_ID>'`.
@@ -429,52 +523,105 @@ async function runTask(
   //    context bloat. This tool itself does NOT inject the instruction, because it
   //    cannot reliably determine the parent pane ID (the herdr caller env is not
   //    guaranteed here); the agent-level rule is the reliable mechanism.
-  const promptArgs = [
-    "agent",
-    "prompt",
-    agentName,
-    task,
-    "--wait",
-    "--timeout",
-    String(opts.timeoutMs),
-  ];
-  // One deadline bounds the whole wait (prompt --wait + the terminal-state
-  // poll below), and the same deadline drives the countdown ticker — so the
-  // displayed counter always matches the actual remaining wait. Previously the
-  // poll recomputed a fresh deadline after the prompt, allowing up to 2x the
-  // configured timeout.
+  // Submit WITHOUT --wait, then supervise the worker ourselves. A blocking
+  // `prompt --wait` cannot be supervised: a stuck worker would hold it until
+  // the full timeout with no chance to intervene. Our own poll loop observes
+  // the live `agent_status` every WAIT_POLL_MS (feeding the parent-TUI widget
+  // via onActive), stops at the first terminal state, and kills workers that
+  // go stale (see STALE_STREAK_THRESHOLD) instead of waiting out the timeout.
+  const { code: submitCode, stdout: submitOut, stderr: submitErr } =
+    await runHerdr(["agent", "prompt", agentName, task]);
+  if (submitCode !== 0) {
+    return {
+      content: [
+        {
+          type: "text",
+          text: `pi-subagents: prompt submit failed: ${submitErr || submitOut}`,
+        },
+      ],
+      details: { paneId, agentId: opts.agentId, agent: agentName, done: false },
+    };
+  }
+  // One deadline bounds the whole supervision, and the same deadline drives
+  // the countdown ticker — so the displayed counter always matches the actual
+  // remaining wait.
   const deadline = Date.now() + opts.timeoutMs;
   const stopCountdown = startCountdown({
     paneId,
     baseLabel: agentName,
+    agentId: opts.agentId,
     agentName,
     deadline,
+    timeoutMs: opts.timeoutMs,
     signal: opts.signal,
     onUpdate: opts.onUpdate,
     onStatus: opts.onStatus,
+    onActive: (tick) => emitActive(tick),
   });
-  let promptCode = 1;
-  let agentStatus = "working";
+  // Herdr's terminal states. `idle` only counts after the worker was observed
+  // busy at least once — a fresh agent reports `idle` before its first turn,
+  // and `done` only ever appears after a turn ran.
   const terminalStates = new Set(["idle", "done", "blocked"]);
+  let agentStatus = "submitted";
+  let sawActive = false;
+  let staleStreak = 0;
+  let staleKilled = false;
+  let done = false;
+  // Only push status updates when the observed value actually changed. The
+  // countdown ticker already refreshes the widget every second — re-pushing
+  // an identical "working" here would tear down and rebuild the widget
+  // component twice per second for no visible change (visible flicker).
+  let lastReported: string | undefined;
+  const reportStatus = (status: string): void => {
+    agentStatus = status;
+    emitActive({
+      agentId: opts.agentId,
+      agentName,
+      paneId,
+      timeoutMs: opts.timeoutMs,
+      phase: "working",
+      status,
+    });
+  };
   try {
-    ({ code: promptCode } = await runHerdr(promptArgs));
-
-    // Explicitly confirm the terminal state (prompt --wait can be lenient on
-    // timeouts) before reading the summary. Uses the remaining time only.
     for (;;) {
       if (Date.now() >= deadline) break;
       const g = await runHerdr(["agent", "get", agentName]);
       const m = /"agent_status"\s*:\s*"(\w+)"/.exec(g.stdout || "");
-      agentStatus = m ? m[1] : agentStatus;
-      if (terminalStates.has(agentStatus)) break;
-      await sleep(1000);
+      if (g.code !== 0 || !m) {
+        // Lookup failed or reported no status: the worker may be gone.
+        // Tolerate a few transient socket hiccups before acting.
+        staleStreak++;
+      } else {
+        const observed = m[1];
+        if (observed === "working" || observed === "blocked") sawActive = true;
+        staleStreak = observed === "unknown" ? staleStreak + 1 : 0;
+        if (observed !== lastReported) {
+          lastReported = observed;
+          reportStatus(observed);
+        }
+        if (
+          terminalStates.has(observed) &&
+          (observed !== "idle" || sawActive)
+        ) {
+          done = true;
+          break;
+        }
+      }
+      if (staleStreak >= STALE_STREAK_THRESHOLD) {
+        // Gone/stuck: kill the pane now instead of waiting out the timeout.
+        await runHerdr(["pane", "close", paneId]);
+        staleKilled = true;
+        reportStatus("stale — killed");
+        break;
+      }
+      await sleep(WAIT_POLL_MS);
     }
   } finally {
     // Always restore the pane label and clear the parent status, even when the
     // wait throws — a stale "⏳ 00:00" label must never outlive the task.
     await stopCountdown();
   }
-  const done = promptCode === 0 || terminalStates.has(agentStatus);
 
   // 4) Optionally close the pane / agent. The worker already sent its summary to
   //    the orchestrator's pane via backchannel (see step 3), so there is nothing
@@ -502,8 +649,15 @@ async function runTask(
   // 4) Optionally close the pane / agent. The worker already sent its summary to the
   //    orchestrator's pane via backchannel (see step 3); we additionally read it
   //    back here so the summary is not lost when there is no orchestrator pane.
+  // A stale-killed pane is already closed by the watchdog; otherwise close it
+  // here when requested. The worker already sent its summary to the
+  // orchestrator's pane via backchannel (see step 3); we additionally read it
+  // back here so the summary is not lost when there is no orchestrator pane.
   let closed = false;
-  if (opts.closePaneOnDone) {
+  if (staleKilled) {
+    closed = await isPaneClosed(paneId);
+  }
+  if (opts.closePaneOnDone && !closed) {
     await runHerdr(["pane", "close", paneId]);
     closed = await isPaneClosed(paneId);
     if (!closed) {
@@ -516,17 +670,25 @@ async function runTask(
   const tl = opts.thinkingLevel ? ` • thinking:${opts.thinkingLevel}` : "";
   const ns = opts.noSkills ? " • no-skills" : "";
   const nest = opts.nestedSubagentAllowed ? " • nested" : "";
+  const outcome = done
+    ? "task completed"
+    : staleKilled
+      ? `stale (${agentStatus}) — worker killed`
+      : "timed out";
   const status = `pi-subagents: pane ${paneId} • ${opts.model}${tl}${ns}${nest} • agent ${agentName} • ${
-    done ? "task completed" : "timed out"
-  } • ${opts.closePaneOnDone ? (closed ? "pane closed" : "pane still open") : "pane open"}`;
+    outcome
+  } • ${opts.closePaneOnDone || staleKilled ? (closed ? "pane closed" : "pane still open") : "pane open"}`;
 
   // The close reason is always surfaced to the caller: when the worker finished
-  // normally that is "task completed"; when it did not reach a terminal state in
-  // time the pane was closed by the orchestrator due to a timeout. Never leave
-  // the parent guessing why the subagent disappeared.
+  // normally that is "task completed"; when it went stale the watchdog killed
+  // it; when it did not reach a terminal state in time the pane was closed by
+  // the orchestrator due to a timeout. Never leave the parent guessing why
+  // the subagent disappeared.
   const closeReason = done
     ? "task completed"
-    : "timed out (worker did not reach a terminal state before the pane was closed)";
+    : staleKilled
+      ? `stale worker (last status "${agentStatus}") — pane closed by the stale watchdog`
+      : "timed out (worker did not reach a terminal state before the pane was closed)";
 
   const summaryBlock = workerOutput
     ? `\n\n--- Worker output ---\n${workerOutput}`
@@ -539,13 +701,16 @@ async function runTask(
     content: [{ type: "text", text }],
     details: {
       paneId,
+      agentId: opts.agentId,
       model: opts.model,
       thinkingLevel: opts.thinkingLevel,
       noSkills: opts.noSkills,
       nestedSubagentAllowed: opts.nestedSubagentAllowed,
       agent: agentName,
+      agentStatus,
       done,
       closed,
+      staleKilled,
       closeReason,
     },
   };
