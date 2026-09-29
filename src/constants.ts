@@ -16,8 +16,14 @@ export const AGENT_FILENAME = "AGENT.md";
 // *parent* agent (how to spawn this agent: timeouts, task contents, gotchas).
 // The runner itself never reads it; `pi-subagents-list` flags its presence.
 export const USAGE_FILENAME = "USAGE.md";
-// How long to wait before retrying a close that raced with the agent exiting.
-export const CLOSE_RETRY_MS = 400;
+// How long to wait between close attempts. Pane close can race with the
+// agent exiting / Herdr re-rendering, so a single retry is not enough —
+// closePaneRobustly() retries several times with this delay.
+export const CLOSE_RETRY_MS = 800;
+// How many times to attempt `pane close` before giving up and reporting
+// "pane still open". Each attempt is followed by an isPaneClosed() check,
+// so a transient Herdr hiccup no longer leaves a ghost pane behind.
+export const CLOSE_ATTEMPTS = 5;
 // How many recent lines of the worker's terminal to read back so the caller
 // receives the actual result instead of only a status line. Bounded on purpose:
 // reading the whole transcript would reintroduce the context bloat the backchannel

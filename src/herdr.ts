@@ -3,7 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { spawn } from "node:child_process";
 import type { SpFile } from "./types.ts";
-import { HERDR_BIN } from "./constants.ts";
+import { HERDR_BIN, CLOSE_ATTEMPTS, CLOSE_RETRY_MS } from "./constants.ts";
 
 /** Extracts the `error.code` string from a herdr JSON error payload, if any. */
 function parseHerdrErrorCode(stdout: string): string | undefined {
@@ -179,11 +179,44 @@ function boundToLines(text: string, lines: number): string {
   return parts.slice(Math.max(0, parts.length - lines)).join("\n");
 }
 
-/** Returns true once the pane no longer exists in herdr (i.e. it was closed). */
+/** Returns true only once the pane is verifiably gone from herdr.
+ *
+ * Unknown means "still open": when `pane list` fails or its output cannot be
+ * parsed we return false instead of true, so the caller retries the close
+ * rather than reporting a phantom success and leaking a ghost pane. */
 async function isPaneClosed(paneId: string): Promise<boolean> {
-  const { stdout } = await runHerdr(["pane", "list"]);
+  const { stdout, code } = await runHerdr(["pane", "list"]);
+  if (code !== 0) return false;
   const panes = parseHerdrResult<{ pane_id: string }[]>(stdout, "panes");
-  return !panes?.some((p) => p.pane_id === paneId);
+  if (!Array.isArray(panes)) return false;
+  return !panes.some((p) => p.pane_id === paneId);
+}
+
+/** Closes a pane and verifies it is actually gone.
+ *
+ * `pane close` can fail transiently (Herdr busy, agent exiting race), and the
+ * old call-site ignored its exit code and retried only once — the classic
+ * "bazen kapanmıyor" leak. This helper retries up to `attempts` times with
+ * `retryMs` delay, checking isPaneClosed() after every attempt, and returns
+ * the last herdr error so the caller can surface WHY the pane is still open.
+ * Never throws. */
+async function closePaneRobustly(
+  paneId: string,
+  opts: { attempts?: number; retryMs?: number } = {},
+): Promise<{ closed: boolean; attempts: number; lastError?: string }> {
+  const attempts = opts.attempts ?? CLOSE_ATTEMPTS;
+  const retryMs = opts.retryMs ?? CLOSE_RETRY_MS;
+  let lastError: string | undefined;
+  for (let i = 1; i <= attempts; i++) {
+    if (await isPaneClosed(paneId)) return { closed: true, attempts: i, lastError };
+    const r = await runHerdr(["pane", "close", paneId]);
+    if (r.code !== 0) {
+      lastError = (r.stderr || r.stdout || `exit ${r.code}`).trim();
+    }
+    if (await isPaneClosed(paneId)) return { closed: true, attempts: i, lastError };
+    if (i < attempts) await sleep(retryMs);
+  }
+  return { closed: await isPaneClosed(paneId), attempts, lastError };
 }
 
 export {
@@ -195,4 +228,5 @@ export {
   cleanupSpFiles,
   readAgentOutput,
   isPaneClosed,
+  closePaneRobustly,
 };

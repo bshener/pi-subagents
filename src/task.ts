@@ -7,7 +7,6 @@ import {
   MIN_TIMEOUT_MS,
   WAIT_POLL_MS,
   STALE_STREAK_THRESHOLD,
-  CLOSE_RETRY_MS,
   WORKER_OUTPUT_LINES,
   START_BACKOFF_MS,
 } from "./constants.ts";
@@ -28,6 +27,7 @@ import {
   writeTempSystemPrompt,
   cleanupSpFiles,
   isPaneClosed,
+  closePaneRobustly,
 } from "./herdr.ts";
 
 /** Converts a formatted agent listing string into a typed AgentToolResult. */
@@ -495,14 +495,18 @@ async function runTask(
     await sleep(START_BACKOFF_MS * (startAttempt + 1));
   }
   if (startCode !== 0) {
+    // Ghost-pane guard: the split already allocated a pane, so a failed start
+    // must not leave it behind. Best-effort close (never fails the report).
+    const close = await closePaneRobustly(paneId).catch(() => undefined);
+    const closedSuffix = close ? (close.closed ? " • pane closed" : ` • pane still open${close.lastError ? ` (close error: ${close.lastError})` : ""}`) : "";
     return {
       content: [
         {
           type: "text",
-          text: `pi-subagents: agent start failed (after ${startAttempt + 1} attempt(s)): ${startErr || startOut}`,
+          text: `pi-subagents: agent start failed (after ${startAttempt + 1} attempt(s)): ${startErr || startOut}${closedSuffix}`,
         },
       ],
-      details: {},
+      details: { paneId, agentId: opts.agentId, agent: agentName, done: false, closed: close?.closed ?? false },
     };
   }
 
@@ -532,14 +536,26 @@ async function runTask(
   const { code: submitCode, stdout: submitOut, stderr: submitErr } =
     await runHerdr(["agent", "prompt", agentName, task]);
   if (submitCode !== 0) {
+    // Same ghost-pane guard as start failure: do not leave the pane behind.
+    // Honor closePaneOnDone so explicit `false` still keeps the pane for debug.
+    let closed = false;
+    let closeError: string | undefined;
+    if (opts.closePaneOnDone) {
+      const r = await closePaneRobustly(paneId).catch(() => undefined);
+      closed = r?.closed ?? false;
+      closeError = r?.lastError;
+    } else {
+      closed = await isPaneClosed(paneId).catch(() => false);
+    }
+    const suffix = opts.closePaneOnDone ? (closed ? " • pane closed" : ` • pane still open${closeError ? ` (close error: ${closeError})` : ""}`) : " • pane open";
     return {
       content: [
         {
           type: "text",
-          text: `pi-subagents: prompt submit failed: ${submitErr || submitOut}`,
+          text: `pi-subagents: prompt submit failed: ${submitErr || submitOut}${suffix}`,
         },
       ],
-      details: { paneId, agentId: opts.agentId, agent: agentName, done: false },
+      details: { paneId, agentId: opts.agentId, agent: agentName, done: false, closed },
     };
   }
   // One deadline bounds the whole supervision, and the same deadline drives
@@ -567,6 +583,7 @@ async function runTask(
   let staleStreak = 0;
   let staleKilled = false;
   let done = false;
+  let cancelled = false;
   // Only push status updates when the observed value actually changed. The
   // countdown ticker already refreshes the widget every second — re-pushing
   // an identical "working" here would tear down and rebuild the widget
@@ -585,6 +602,11 @@ async function runTask(
   };
   try {
     for (;;) {
+      if (opts.signal?.aborted) {
+        cancelled = true;
+        agentStatus = "cancelled";
+        break;
+      }
       if (Date.now() >= deadline) break;
       const g = await runHerdr(["agent", "get", agentName]);
       const m = /"agent_status"\s*:\s*"(\w+)"/.exec(g.stdout || "");
@@ -610,7 +632,9 @@ async function runTask(
       }
       if (staleStreak >= STALE_STREAK_THRESHOLD) {
         // Gone/stuck: kill the pane now instead of waiting out the timeout.
-        await runHerdr(["pane", "close", paneId]);
+        // Robust close here too — a single `pane close` can fail transiently
+        // and the final cleanup below re-verifies anyway.
+        await closePaneRobustly(paneId).catch(() => undefined);
         staleKilled = true;
         reportStatus("stale — killed");
         break;
@@ -654,17 +678,24 @@ async function runTask(
   // orchestrator's pane via backchannel (see step 3); we additionally read it
   // back here so the summary is not lost when there is no orchestrator pane.
   let closed = false;
+  let closeError: string | undefined;
   if (staleKilled) {
     closed = await isPaneClosed(paneId);
+    if (!closed) {
+      const r = await closePaneRobustly(paneId);
+      closed = r.closed;
+      closeError = r.lastError;
+    }
   }
   if (opts.closePaneOnDone && !closed) {
-    await runHerdr(["pane", "close", paneId]);
-    closed = await isPaneClosed(paneId);
-    if (!closed) {
-      await sleep(CLOSE_RETRY_MS);
-      await runHerdr(["pane", "close", paneId]);
-      closed = await isPaneClosed(paneId);
+    // Focused-pane guard: Herdr occasionally refuses to close the focused
+    // pane, so best-effort focus the parent first (never fails the task).
+    if (parentPaneId) {
+      await runHerdr(["pane", "focus", parentPaneId]).catch(() => undefined);
     }
+    const r = await closePaneRobustly(paneId);
+    closed = r.closed;
+    closeError = r.lastError;
   }
 
   const tl = opts.thinkingLevel ? ` • thinking:${opts.thinkingLevel}` : "";
@@ -672,12 +703,13 @@ async function runTask(
   const nest = opts.nestedSubagentAllowed ? " • nested" : "";
   const outcome = done
     ? "task completed"
-    : staleKilled
-      ? `stale (${agentStatus}) — worker killed`
-      : "timed out";
-  const status = `pi-subagents: pane ${paneId} • ${opts.model}${tl}${ns}${nest} • agent ${agentName} • ${
-    outcome
-  } • ${opts.closePaneOnDone || staleKilled ? (closed ? "pane closed" : "pane still open") : "pane open"}`;
+    : cancelled
+      ? `cancelled (${agentStatus}) — worker stopped`
+      : staleKilled
+        ? `stale (${agentStatus}) — worker killed`
+        : "timed out";
+  const statusBase = `pi-subagents: pane ${paneId} • ${opts.model}${tl}${ns}${nest} • agent ${agentName} • ${outcome} • ${opts.closePaneOnDone || staleKilled ? (closed ? "pane closed" : "pane still open") : "pane open"}`;
+  const status = !closed && (opts.closePaneOnDone || staleKilled) && closeError ? `${statusBase} (close error: ${closeError})` : statusBase;
 
   // The close reason is always surfaced to the caller: when the worker finished
   // normally that is "task completed"; when it went stale the watchdog killed
@@ -686,9 +718,11 @@ async function runTask(
   // the subagent disappeared.
   const closeReason = done
     ? "task completed"
-    : staleKilled
-      ? `stale worker (last status "${agentStatus}") — pane closed by the stale watchdog`
-      : "timed out (worker did not reach a terminal state before the pane was closed)";
+    : cancelled
+      ? "cancelled by parent (AbortSignal) — pane closed during cleanup"
+      : staleKilled
+        ? `stale worker (last status "${agentStatus}") — pane closed by the stale watchdog`
+        : "timed out (worker did not reach a terminal state before the pane was closed)";
 
   const summaryBlock = workerOutput
     ? `\n\n--- Worker output ---\n${workerOutput}`
@@ -711,7 +745,9 @@ async function runTask(
       done,
       closed,
       staleKilled,
+      cancelled,
       closeReason,
+      closeError,
     },
   };
 }
