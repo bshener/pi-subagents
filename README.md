@@ -127,10 +127,13 @@ refuses to silently inherit the current model.
 /pi-subagents-list
 ```
 
-`/pi-subagents-list` groups agents by source directory (project-local
-`<project>/.pi/agents` and global `~/.pi/agent/agents`) so you can see where each
-agent is defined. Run it from the project directory to see both. If
-`PI_SUBAGENTS_DIR` is set, that directory is shown instead.
+`/pi-subagents-list` prints a compact name-only listing grouped by source
+directory (project-local `<project>/.pi/agents` and global
+`~/.pi/agent/agents`), so you can see where each agent is defined without a wall
+of text. Run it from the project directory to see both. If
+`PI_SUBAGENTS_DIR` is set, that directory is shown instead. The `pi-subagents-list`
+*tool* keeps the long form (name — description — model) because the model needs
+it to choose an agent.
 
 `/pi-subagents` and `/pi-subagents-list` also accept the tool-call form
 (`pi-subagents` / `pi-subagents-list` from the `/` menu), whereas the

@@ -28,25 +28,38 @@ export function globalAgentsDir(): string {
   return path.join(os.homedir(), ".pi", "agent", "agents");
 }
 
-/** Lists project-local agents (from <cwd>/.pi/agents) and global agents together. */
+/**
+ * Lists project-local agents (from <cwd>/.pi/agents) and global agents together
+ * as compact name-only groups: one "Project (...)"/"Global (...)" header per
+ * source directory followed by indented agent names. Used by the
+ * /pi-subagents-list command, where long descriptions blow up the transcript.
+ * The pi-subagents-list TOOL keeps the descriptive form (listAgentsBySource)
+ * because the model needs it to pick an agent.
+ */
 export async function agentsBySourceTextForCwd(cwd: string): Promise<string> {
-  const lines: string[] = [];
+  const groups: string[] = [];
   const projectDir = path.join(cwd, ".pi", "agents");
   const projectAgents = await discoverAgentsIn(projectDir);
-  for (const a of projectAgents) {
-    lines.push(
-      `[${projectDir}] ${a.name} — ${a.description} (${a.model ?? "default"})${usageMarker(a)}`,
+  if (projectAgents.length > 0) {
+    groups.push(
+      [`Project (${projectDir})`, ...projectAgents.map((a) => `  ${a.name}`)].join(
+        "\n",
+      ),
     );
   }
   const globalDir = globalAgentsDir();
   const globalAgents = await discoverAgentsIn(globalDir);
-  for (const a of globalAgents) {
-    lines.push(
-      `[${globalDir}] ${a.name} — ${a.description} (${a.model ?? "default"})${usageMarker(a)}`,
+  if (globalAgents.length > 0) {
+    groups.push(
+      [`Global (${globalDir})`, ...globalAgents.map((a) => `  ${a.name}`)].join(
+        "\n",
+      ),
     );
   }
-  if (lines.length === 0) return "(no agents found)";
-  return lines.join("\n");
+  if (groups.length === 0) return "(no agents found)";
+  // Leading blank line so the first group header does not stick to the line
+  // that invoked the command.
+  return `\n${groups.join("\n\n")}`;
 }
 
 /** Groups agents by their source directory (e.g., project-local vs global). */
