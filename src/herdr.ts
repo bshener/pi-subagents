@@ -196,7 +196,7 @@ async function isPaneClosed(paneId: string): Promise<boolean> {
  *
  * `pane close` can fail transiently (Herdr busy, agent exiting race), and the
  * old call-site ignored its exit code and retried only once — the classic
- * "bazen kapanmıyor" leak. This helper retries up to `attempts` times with
+ * ghost-pane leak. This helper retries up to `attempts` times with
  * `retryMs` delay, checking isPaneClosed() after every attempt, and returns
  * the last herdr error so the caller can surface WHY the pane is still open.
  * Never throws. */

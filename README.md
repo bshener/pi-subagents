@@ -1,5 +1,7 @@
 # pi-subagents
 
+> Run isolated pi subagents in visible Herdr panes — one command, own model, auto-close.
+
 A [pi](https://github.com/earendil-works/pi-coding-agent) extension that opens a
 new visible pane in [Herdr](https://herdr.dev) and launches an isolated pi
 **subagent** inside it. Each subagent runs its own model, gets its own system
@@ -218,6 +220,14 @@ npm run dev         # pi -e ./src/index.ts
 
 Extensions run with your full system permissions and can execute arbitrary code.
 Only install extensions from sources you trust.
+
+## Support
+
+Free and open source — MIT licensed, no paid features. If it saves you time,
+every contribution goes straight back into new projects.
+
+<a href="https://buymeacoffee.com/bshener"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me a Coffee" height="60" /></a>
+<a href="https://www.patreon.com/bshener"><img src="https://c5.patreon.com/external/logo/become_a_patron_button@2x.png" alt="Become a Patron" height="60" /></a>
 
 ## License
 
